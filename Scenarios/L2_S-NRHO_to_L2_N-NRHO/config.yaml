@@ -1,19 +1,16 @@
 ---
-name: "L2 S-NRHO to L2 N-NRHO Transfer - Deterministic"
+name: "L2 S-NRHO to L2 N-NRHO Transfer"
 description: "NRHO to NRHO transfer with small execution errors and small initial/final covariance, limited phasing"
-det_or_stoch: "Deterministic"
 dynamics:
   type: "CR3BP"
   sys_param_file: '../CR3BP_dev/EarthMoon_System/EMsys.yaml'
-hot_starter:
-  bool: false
-  file: 'init_conds/JGCD/feedback_param/threebody/case1/sol.pkl'
 integration:
   a_tol: 1.e-12
   r_tol: 1.e-12
-  int_save: 2
+  int_save: 64
   mc_div: 2
 segments: 41
+MC_trials: 64
 boundary_conditions:
   t0: "2026-01-01T00:00:00"
   tf: "2026-01-11T00:00:00"
@@ -46,36 +43,31 @@ uncertainty:
       pos_sig: 10
       vel_sig: .02
       mass_sig: 60
-  acc_sig: 5.e-12
+  acc_sig: 0.0
   gates:
     fixed_mag: 1.e-3
     prop_mag: 1.e-3
     fixed_point: 1.e-3
     prop_point: 1.e-3
   eps: .001
-UT:
-  alpha: 1.0
-  beta: 2.0
-  kappa: 4.0
-SNOPT:
-  major_opt_tol: 1.e-4
-  major_feas_tol: 1.e-6
-  minor_feas_tol: 1.e-6
-  major_iter_limit: 10000
-  partial_price: 1
-  linesearch_tol: .99
-  function_prec: 1e-11
-constraints:
-  deterministic:
-    det_col_avoid:
+constraints: 
+  col_avoid:
+    parameters:
+      r_obs: [384967.8803361727, 0., 0.]
+      safe_d: 1737.5
+    det:
       bool: true
-      parameters: &col_avoid
-        r_obs: [384967.8803361727, 0., 0.]
-        safe_d: 1737.5
-  stochastic:
-    det_col_avoid:
-      bool: true
-      parameters: *col_avoid
-    stat_col_avoid:
+    stat:
       bool: false
-      parameters: *col_avoid
+      UT:
+        alpha: 1.0
+        beta: 2.0
+        kappa: 4.0
+SNOPT:
+  major_opt_tol: 1.e-1
+  major_feas_tol: 1.e-6
+  minor_feas_tol: 1.e-2
+  major_iter_limit: 10000
+  partial_price: 10
+  linesearch_tol: .99
+  function_prec: 1e-10

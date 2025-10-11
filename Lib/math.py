@@ -19,7 +19,6 @@ def calc_t_elapsed_nd(t0, tf, nodes, t_star):
     return t_elapsed_nd
 
 
-
 # --------------
 # JAX Functions
 # --------------
@@ -32,15 +31,32 @@ def col_avoid(X, r_obs, safe_d):
 
 col_avoid_vmap = jax.vmap(col_avoid, in_axes=(0, None, None))
 
+def mat_sqrt(A):
+    return jnp.linalg.cholesky(A)
+
+def mat_lmax(A):
+    return jnp.linalg.eigvalsh(A + 1e-12*jnp.diag(jnp.linspace(1.,2.,A.shape[0])))[-1]
+
+mat_lmax_vmap = jax.vmap(mat_lmax, in_axes=(0))
+
 
 # ----------------
 # Numpy Functions
 # ----------------
 
-def sig2cov(r_1sig, v_1sig, m_1sig, Sys):
+def sig2cov(r_1sig, v_1sig, m_1sig, Sys, m0):
     r_cov = (r_1sig/Sys['Ls'])**2
     v_cov = (v_1sig/Sys['Vs'])**2
-    m_cov = (m_1sig/Sys['Ms'])**2
+    m_cov = (m_1sig/m0)**2
 
     return np.diag(np.array([r_cov, r_cov, r_cov, v_cov, v_cov, v_cov, m_cov]))
+
+def cart2sph(r_vec):
+    r = np.linalg.norm(r_vec, axis=1)
+    th = np.arctan2(r_vec[:,1], r_vec[:,0])*180/np.pi
+    phi = np.arcsin(r_vec[:,2]/r)*180/np.pi
+
+    return np.array([r, th, phi]).T
+
+
 

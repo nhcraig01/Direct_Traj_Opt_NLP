@@ -5,14 +5,15 @@ import jax
 from jax import numpy as jnp
 import diffrax as dfx
 
-from Lib.math import calc_t_elapsed_nd, sig2cov
-from Lib.dynamics import CR3BPDynamics, forward_propagation_iterate, backward_propagation_iterate, objective_and_constraints
+from Lib.math import calc_t_elapsed_nd, sig2cov, cart2sph
+from Lib.dynamics import CR3BPDynamics, forward_propagation_iterate, backward_propagation_iterate, objective_and_constraints, forward_propagation_cov_iterate, sim_MC_trajs, sim_Det_traj, MC_worker_par
 
 import functools as ft
 
 import scipy as sp
+from scipy.stats import chi2
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import h5py
 
@@ -56,6 +57,7 @@ def process_sparsity(grad_nonsparse):
         new_obj_constr = {}
         for key2, val2_jax in cur_obj_constr.items():
             val2 = np.array(val2_jax)
+            
             if len(val2.shape) != 2:
                 if key == 'c_P_Xf':
                     new_obj_constr[key2] = val2.reshape(1,-1)
@@ -71,7 +73,7 @@ def process_sparsity(grad_nonsparse):
     
     return grad_sparse
 
-def process_config(config):
+def process_config(config, problem_type: str):
     """ This function processes the configuration file and returns the optimization arguments and boundary conditions
     """
     # Name
@@ -84,7 +86,7 @@ def process_config(config):
     # Hot starter (to do later) **********
 
     # Optimization type
-    det_or_stoch = config['det_or_stoch']
+    det_or_stoch = problem_type
 
     # Integration
     int_save = config['integration']['int_save']
@@ -94,6 +96,9 @@ def process_config(config):
     # Segments
     N = config['segments']
     nodes = N-1
+
+    # MC Trials
+    N_trials = config['MC_trials']
 
     # Forward and backward indices
     indx_f = jnp.array(np.arange(0, nodes//2))
@@ -119,7 +124,7 @@ def process_config(config):
     Boundary_Conds = {}
     Boundary_Conds['Orb0'] = {}
     Boundary_Conds['Orb0']['X_hst'] = Orb0_X_hst
-    Boundary_Conds['Orb0']['t_hst'] =Orb0_t_hst
+    Boundary_Conds['Orb0']['t_hst'] = Orb0_t_hst
 
     Boundary_Conds['Orbf'] = {}
     Boundary_Conds['Orbf']['X_hst'] = Orbf_X_hst
@@ -172,22 +177,26 @@ def process_config(config):
     prop_mag = config['uncertainty']['gates']['prop_mag'] # fraction
     fixed_point = config['uncertainty']['gates']['fixed_point'] # fraction
     prop_point = config['uncertainty']['gates']['prop_point'] # fraction
-
-    eps = config['uncertainty']['eps']
-
-    # Collision Avoidance
-    detdet = config['constraints']['deterministic']['det_col_avoid']['bool']
-    stochdet = config['constraints']['stochastic']['det_col_avoid']['bool']
-    stochstoch = config['constraints']['stochastic']['stat_col_avoid']['bool']
-
-    # Unscented Transform
-    alpha_UT = config['UT']['alpha']
-    beta_UT = config['UT']['beta']
-    kappa_UT = config['UT']['kappa']
     
+    eps = config['uncertainty']['eps']
+    
+    # Covariance Terms
+    init_cov = sig2cov(r_1sig, v_1sig, m_1sig, Sys, m0)
+    targ_cov = sig2cov(r_1sig_t, v_1sig_t, m_1sig_t, Sys, m0)
+    G_stoch = np.diag(np.array([a_err/Sys['As'], a_err/Sys['As'], a_err/Sys['As']])) # stochastic model error
+    gates = np.array([fixed_mag, prop_mag, fixed_point, prop_point])
+
     # Collision Avoidance
-    r_obs = jnp.array(config['constraints']['deterministic']['det_col_avoid']['parameters']['r_obs'])/Sys['Ls']
-    d_safe = jnp.array(config['constraints']['deterministic']['det_col_avoid']['parameters']['safe_d'])/Sys['Ls']
+    r_obs = jnp.array(config['constraints']['col_avoid']['parameters']['r_obs'])/Sys['Ls']
+    d_safe = jnp.array(config['constraints']['col_avoid']['parameters']['safe_d'])/Sys['Ls']
+
+    det_col_avoid = config['constraints']['col_avoid']['det']['bool']
+    stat_col_avoid = config['constraints']['col_avoid']['stat']['bool']
+
+    # Stat chance constrained col avoidance terms
+    alpha_UT = config['constraints']['col_avoid']['stat']['UT']['alpha']
+    beta_UT = config['constraints']['col_avoid']['stat']['UT']['beta']
+    kappa_UT = config['constraints']['col_avoid']['stat']['UT']['kappa']
     
     optOptions = {"Major optimality tolerance": config['SNOPT']['major_opt_tol'],
                   "Major feasibility tolerance": config['SNOPT']['major_feas_tol'],
@@ -199,15 +208,6 @@ def process_config(config):
                   'Verify level': -1,
                   'Nonderivative linesearch': 1}
 
-    # Covariance Terms
-    init_cov = sig2cov(r_1sig, v_1sig, m_1sig, Sys)
-    targ_cov = sig2cov(r_1sig_t, v_1sig_t, m_1sig_t, Sys)
-
-    G_stoch = np.diag(np.array([0, 0, 0, a_err/Sys['As'], a_err/Sys['As'], a_err/Sys['As'], 0])) # stochastic model error
-
-    gates = np.array([fixed_mag, prop_mag, fixed_point, prop_point])
-
-    
     # Choose Dynamics
     if config['dynamics']['type'] == 'CR3BP':
         dyn_safe = 1737.5/Sys['Ls']
@@ -216,9 +216,6 @@ def process_config(config):
         dynamics = {'eom_eval': eom_eval,
                  'Aprop_eval': Aprop_eval, 
                  'Bprop_eval': Bprop_eval}
-
-
-    # Optimization problem arguments
     
     # Static configuration arguments
     @dataclass()
@@ -229,23 +226,38 @@ def process_config(config):
         a_tol: float
         nodes: int
         N: int
+        N_trials: int
         ve: float
         T_max_nd: float
         int_save: int
         free_phasing: bool
         det_col_avoid: bool 
-    cfg_args = args_static(cfg_name, det_or_stoch, r_tol, a_tol, nodes, N, ve, U_Acc_min_nd, int_save, True if phasing == 'free' else False, detdet)
+        stat_col_avoid: bool
+        alpha_UT: float
+        beta_UT: float
+        kappa_UT: float
+        eps_UT: float
+        mx: float
+    cfg_args = args_static(cfg_name, det_or_stoch, r_tol, a_tol, nodes, N, N_trials, ve, U_Acc_min_nd, int_save, 
+                           True if phasing == 'free' else False, det_col_avoid, stat_col_avoid, 
+                           alpha_UT, beta_UT, kappa_UT, eps, np.sqrt(chi2.ppf(1-eps,3)))
 
-    # Dynamic arguments
+    # Dynamic arguments (arrays and such)
     dyn_args = {'t_node_bound': t_node_bound,
                 'indx_f': indx_f, 
                 'indx_b': indx_b,
                 'r_obs': r_obs, 
-                'd_safe': d_safe}
+                'd_safe': d_safe,
+                'init_cov': init_cov,
+                'targ_cov': targ_cov,
+                'targ_cov_inv': np.linalg.inv(targ_cov),
+                'targ_cov_inv_sqrt': np.linalg.cholesky(np.linalg.inv(targ_cov)),
+                'G_stoch': G_stoch,
+                'gates': gates}
 
     return Sys, dynamics, Boundary_Conds, cfg_args, dyn_args, optOptions
     
-def prepare_prop_funcs(eoms_gen, dynamics, propagator_gen, dyn_args, cfg_args):
+def prepare_prop_funcs(eoms_gen, dynamics, propagator_gen, propagator_gen_fin, dyn_args, cfg_args):
     
     # EOM given time, states and arguments
     eom_e = lambda t, states, args: eoms_gen(t, states, args, dynamics, cfg_args)
@@ -253,32 +265,36 @@ def prepare_prop_funcs(eoms_gen, dynamics, propagator_gen, dyn_args, cfg_args):
     # Propagator given intial condition and arguments over span
     propagator_e = lambda X0, U, t0, t1, cfg_args: propagator_gen(X0, U, t0, t1, eom_e, cfg_args)
     propagators = {'propagator_e': propagator_e}
-
+    iterators = {}
     # Forward ode iteration given index and input_dict
-    if cfg_args.det_or_stoch.lower() == 'deterministic':
-        forward_propagation_iterate_e = lambda i, input_dict: forward_propagation_iterate(i, input_dict, propagator_e, dyn_args, cfg_args)
-        backward_propagation_iterate_e = lambda i, input_dict: backward_propagation_iterate(i, input_dict, propagator_e, dyn_args, cfg_args)
-    elif cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
-        propagator_dX0_e = jax.jacrev(propagator_e.ys[-1,:].flatten(), argnums=0)
-        propagator_dU_e = jax.jacrev(propagator_e.ys[-1,:].flatten(), argnums=1)
+    if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
+        propagator_e_fin = lambda X0, U, t0, t1, cfg_args: propagator_gen_fin(X0, U, t0, t1, eom_e, cfg_args)
+        propagator_dX0_e = jax.jacfwd(propagator_e_fin, argnums=0)
+        propagator_dU_e = jax.jacfwd(propagator_e_fin, argnums=1)
+
         propagators['propagator_dX0_e'] = propagator_dX0_e
         propagators['propagator_dU_e'] = propagator_dU_e
 
-        forward_propagation_iterate_e = lambda i, input_dict: forward_propagation_iterate(i, input_dict, propagator_e, propagator_dX0_e, propagator_dU_e, dyn_args, cfg_args)
-        backward_propagation_iterate_e = lambda i, input_dict: backward_propagation_iterate(i, input_dict, propagator_e, propagator_dX0_e, propagator_dU_e, dyn_args, cfg_args)
+        cov_propagation_iterate_e = lambda i, input_dict: forward_propagation_cov_iterate(i, input_dict, dyn_args, cfg_args)
+        iterators['cov_propagation_iterate_e'] = cov_propagation_iterate_e
 
-    return eom_e, propagators, forward_propagation_iterate_e, backward_propagation_iterate_e
+    forward_propagation_iterate_e = lambda i, input_dict: forward_propagation_iterate(i, input_dict, propagators, dyn_args, cfg_args)
+    backward_propagation_iterate_e = lambda i, input_dict: backward_propagation_iterate(i, input_dict, propagators, dyn_args, cfg_args)
 
-def prepare_opt_funcs(Boundary_Conds, for_prop_iter, back_prop_iter, dyn_args, cfg_args):
+    iterators['forward_propagation_iterate_e'] = forward_propagation_iterate_e
+    iterators['backward_propagation_iterate_e'] = backward_propagation_iterate_e
+    return eom_e, propagators, iterators
 
-    func = lambda inputs: objective_and_constraints(inputs, Boundary_Conds, for_prop_iter, back_prop_iter, dyn_args, cfg_args)
-    vals = jax.jit(jax.block_until_ready(func), backend='cpu')
-    grad = jax.jit(jax.block_until_ready(jax.jacrev(func)), backend='cpu')
-    sens = jax.jit(jax.block_until_ready(lambda inputs, cvals: grad(inputs)), backend='cpu')
+def prepare_opt_funcs(Boundary_Conds, iterators, dyn_args, cfg_args):
+
+    func = lambda inputs: objective_and_constraints(inputs, Boundary_Conds, iterators, dyn_args, cfg_args)
+    vals = jax.jit(func, backend='cpu')
+    grad = jax.jit(jax.jacfwd(func), backend='cpu')
+    sens = jax.jit(lambda inputs, cvals: grad(inputs), backend='cpu')
 
     return vals, grad, sens
 
-def prepare_sol(solution, Sys, Boundary_Conds, popagator, dyn_args, cfg_args):
+def prepare_sol(solution, Sys, Boundary_Conds, propagators, dyn_args, cfg_args):
     
     t_node_bound = dyn_args['t_node_bound']
 
@@ -287,8 +303,7 @@ def prepare_sol(solution, Sys, Boundary_Conds, popagator, dyn_args, cfg_args):
     output["Name"] = cfg_args.cfg_name
     output['Orb0'] = {}
     output['Orbf'] = {}
-    output['DetTraj'] = {}
-    output['dV_det'] = {}
+    output['Det'] = {}
 
     # Store departure and arrival orbits
     output['Orb0']['X_hst'] = Boundary_Conds['Orb0']['X_hst']
@@ -296,45 +311,88 @@ def prepare_sol(solution, Sys, Boundary_Conds, popagator, dyn_args, cfg_args):
     output['Orbf']['X_hst'] = Boundary_Conds['Orbf']['X_hst']
     output['Orbf']['t_hst'] = Boundary_Conds['Orbf']['t_hst']
 
-    if cfg_args.det_or_stoch == 'Deterministic':
-        controls = solution.xStar['controls'].reshape(cfg_args.nodes, 3)
+    output['Det'] = sim_Det_traj(solution, Sys, propagators, dyn_args, cfg_args)
+    output['Det']['t_node_bound'] = t_node_bound
 
-        X0 = solution.xStar['X0']
-        optTraj_X_hst = np.ndarray((1,7))
-        optTraj_X_hst[0,:] = X0
-        optTraj_t_hst = np.array([t_node_bound[0]])
-        for k in range(cfg_args.nodes):
-            prop_inputs = {'X0': jnp.array(optTraj_X_hst[-1,:]),
-                           'U': jnp.array(controls[k,:]),
-                           't0': t_node_bound[k],
-                           't1': t_node_bound[k+1]}
-            
-            sol_fwd = popagator(jnp.array(optTraj_X_hst[-1,:]), jnp.array(controls[k,:]), t_node_bound[k], t_node_bound[k+1], cfg_args)
-            optTraj_X_hst = np.vstack([optTraj_X_hst, np.array(sol_fwd.ys[1:,:])])
-            optTraj_t_hst = np.hstack([optTraj_t_hst, np.array(sol_fwd.ts[1:])])
-    
+    # Run Monte Carlo Simulations
+    if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
+        inputs = {'t_node_bound': t_node_bound,
+                  'det_X_node_hst': output['Det']['X_node_hst'],
+                  'det_U_node_hst': output['Det']['U_node_hst'],
+                  'K_ks': output['Det']['K_ks']}
         
-        output['DetTraj']['X_hst'] = optTraj_X_hst
-        output['DetTraj']['t_hst'] = optTraj_t_hst
-        output['DetTraj']['controls'] = sp.interpolate.interp1d(t_node_bound[:-1], controls.T, kind='previous', fill_value="extrapolate")(optTraj_t_hst).T
-        
-        dt = t_node_bound[1]-t_node_bound[0]
-        dV_det = jnp.sum(jnp.linalg.norm(controls, axis=1)*cfg_args.T_max_nd*dt / optTraj_X_hst[::cfg_args.int_save,-1])*Sys['Vs']
-        output['dV_det'] = dV_det
+        rng_seed = 0
+
+        output['MC_Runs'] = sim_MC_trajs(inputs, rng_seed, dyn_args, cfg_args, propagators['propagator_e'], n_jobs = 8)
+        """
+        X_hsts = np.empty((cfg_args.N_trials,cfg_args.nodes*(cfg_args.int_save-1)+1,7))
+        U_hsts = np.empty((cfg_args.N_trials,cfg_args.nodes*(cfg_args.int_save-1)+1,3))
+        U_hsts_sph = np.empty((cfg_args.N_trials,cfg_args.nodes*(cfg_args.int_save-1)+1,3))
+        t_hsts = np.empty((cfg_args.N_trials,cfg_args.nodes*(cfg_args.int_save-1)+1))
+        for i in range(cfg_args.N_trials):
+            X_hsts[i], U_hsts[i], U_hsts_sph[i], t_hsts[i] = MC_worker_par(i, inputs, rng_seed, dyn_args, cfg_args, propagators['propagator_e'])
+
+        output['MC_Runs'] = {}
+        output['MC_Runs']['X_hsts'] = X_hsts
+        output['MC_Runs']['U_hsts'] = U_hsts
+        output['MC_Runs']['U_hsts_sph'] = U_hsts_sph
+        output['MC_Runs']['t_hsts'] = t_hsts
+        """
 
     return output
-
-def save_sol(output, Sys, save_loc: str):
+    
+def save_sol(output, Sys, save_loc: str, cfg_args):
     with h5py.File(save_loc+"data.h5", "w") as f:
         f.create_dataset("Name", data=output['Name'])
+        f.create_dataset("Det_or_stoch", data=cfg_args.det_or_stoch)
         f.create_dataset("Orb0_X_hst", data=output['Orb0']['X_hst'])
         f.create_dataset("Orb0_t_hst", data=output['Orb0']['t_hst'])
         f.create_dataset("Orbf_X_hst", data=output['Orbf']['X_hst'])
         f.create_dataset("Orbf_t_hst", data=output['Orbf']['t_hst'])
-        f.create_dataset("DetTraj_X_hst", data=output['DetTraj']['X_hst'])
-        f.create_dataset("DetTraj_t_hst", data=output['DetTraj']['t_hst'])
-        f.create_dataset("DetTraj_U_hst", data=output['DetTraj']['controls'])
-        f.create_dataset("DetTraj_dV", data=output['dV_det'])
+        f.create_dataset("Det_X_hst", data=output['Det']['X_hst'])
+        f.create_dataset("Det_t_hst", data=output['Det']['t_hst'])
+        f.create_dataset("Det_t_node_bound", data=output['Det']['t_node_bound'])
+        f.create_dataset("Det_U_hst", data=output['Det']['U_hst'])
+        f.create_dataset("Det_U_hst_sph", data=output['Det']['U_hst_sph'])
+        f.create_dataset("Det_dV", data=output['Det']['dV'])
+
+        if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
+            f.create_dataset("Det_A_ks", data=output['Det']['A_ks'])
+            f.create_dataset("Det_B_ks", data=output['Det']['B_ks'])
+            f.create_dataset("Det_K_ks", data=output['Det']['K_ks'])
+            f.create_dataset("Det_P_ks", data=output['Det']['P_ks'])
+
+            f.create_dataset("MC_X_hsts", data=output['MC_Runs']['X_hsts'])
+            f.create_dataset("MC_t_hsts", data=output['MC_Runs']['t_hsts'])
+            f.create_dataset("MC_U_hsts", data=output['MC_Runs']['U_hsts'])
+            f.create_dataset("MC_U_hsts_sph", data=output['MC_Runs']['U_hsts_sph'])
 
     savemat(save_loc+"Sys.mat",Sys)
     return
+
+def save_OptimizerSol(solution, cfg_arg, save_loc: str):
+    with h5py.File(save_loc, "w") as f:
+        f.create_dataset("X0", data=solution.xStar['X0'])
+        f.create_dataset("Xf", data=solution.xStar['Xf'])
+        f.create_dataset("controls", data=solution.xStar['controls'])
+        if cfg_arg.free_phasing:
+            f.create_dataset("alpha", data=solution.xStar['alpha'])
+            f.create_dataset("beta", data=solution.xStar['beta'])
+        if cfg_arg.det_or_stoch == 'stochastic_gauss_zoh':
+            f.create_dataset("xis", data=solution.xStar['xis'])
+    return
+
+def load_OptimizerSol(input_loc: str) -> dict:
+    sol = {}
+    with h5py.File(input_loc, "r") as f:
+        sol["X0"] = f["X0"][:]
+        sol["Xf"] = f["Xf"][:]
+        sol["controls"] = f["controls"][:]
+        if "alpha" in f.keys():
+            sol["alpha"] = f["alpha"][:]
+        if "beta" in f.keys():
+            sol["beta"] = f["beta"][:]
+        if "xis" in f.keys():
+            sol["xis"] = f["xis"][:]
+
+    return sol

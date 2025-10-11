@@ -1,6 +1,6 @@
 ---
-name: "L1 N-HO to L2 N-HO Transfer - Deterministic"
-description: "Northern Halo to Halo transfer with small execution errors and small initial/final covariance, limited phasing"
+name: "Sandbox Test Case - L4 N-Axial to L5 N-Axial - Deterministic"
+description: "IDK whaever... this is just random testing, go see the other scenarios for real stuff"
 dynamics:
   type: "CR3BP"
   sys_param_file: '../CR3BP_dev/EarthMoon_System/EMsys.yaml'
@@ -12,14 +12,14 @@ integration:
 segments: 41
 boundary_conditions:
   t0: "2026-01-01T00:00:00"
-  tf: "2026-02-01T00:00:00"
+  tf: "2026-01-21T00:00:00"
   initial_orbit:
-    family_path: '../CR3BP_dev/EarthMoon_System/L1_N_Halo.h5'
-    Orb_ID: 145
+    family_path: '../CR3BP_dev/EarthMoon_System/L4_N_Axial.h5'
+    Orb_ID: 350
     Start_Idx: 0
   final_orbit:
-    family_path: '../CR3BP_dev/EarthMoon_System/L2_N_Halo.h5'
-    Orb_ID: 30
+    family_path: '../CR3BP_dev/EarthMoon_System/L5_N_Axial.h5'
+    Orb_ID: 200
     Start_Idx: 0
   type: "free"
   alpha:
@@ -31,7 +31,7 @@ boundary_conditions:
 engine:
   m0: 200
   Isp: 3337
-  T_max: .2
+  T_max: .5
 uncertainty:
   covariance:
     initial:
@@ -42,7 +42,7 @@ uncertainty:
       pos_sig: 10
       vel_sig: .02
       mass_sig: 60
-  acc_sig: 1.e-11
+  acc_sig: 5.e-12
   gates:
     fixed_mag: 1.e-3
     prop_mag: 1.e-3
