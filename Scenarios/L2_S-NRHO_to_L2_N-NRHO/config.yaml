@@ -7,7 +7,7 @@ dynamics:
 integration:
   a_tol: 1.e-12
   r_tol: 1.e-12
-  int_save: 64
+  int_save: 32
   mc_div: 2
 segments: 41
 MC_trials: 64
@@ -64,10 +64,10 @@ constraints:
         beta: 2.0
         kappa: 4.0
 SNOPT:
-  major_opt_tol: 1.e-1
+  major_opt_tol: 1.e-2
   major_feas_tol: 1.e-6
   minor_feas_tol: 1.e-2
   major_iter_limit: 10000
-  partial_price: 10
+  partial_price: 5
   linesearch_tol: .99
-  function_prec: 1e-10
+  function_prec: 1e-11

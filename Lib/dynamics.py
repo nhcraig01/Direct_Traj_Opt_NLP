@@ -639,7 +639,7 @@ def MC_worker_par(id, inputs, seed, dyn_args, cfg_args, propagator):
 
 def sim_MC_trajs(inputs, seed, dyn_args, cfg_args, propagator, n_jobs = 8):
 
-    results = Parallel(n_jobs=n_jobs, prefer="threads")(delayed(MC_worker_par)(i, inputs, seed, dyn_args, cfg_args, propagator) for i in tqdm(range(cfg_args.N_trials)))
+    results = Parallel(n_jobs=n_jobs, prefer="threads",verbose=1)(delayed(MC_worker_par)(i, inputs, seed, dyn_args, cfg_args, propagator) for i in tqdm(range(cfg_args.N_trials)))
 
     X_hsts, U_hsts, U_hsts_sph, t_hsts = zip(*results)
 
