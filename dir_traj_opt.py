@@ -24,8 +24,8 @@ if __name__ == "__main__":
 
     # Configuration Files -------------------------------------------------------
     folder_name = "L1_N-HO_to_L2_N-HO"
-    Problem_Type = "deterministic"       # "deterministic" or "stochastic_gauss_zoh"
-    hot_start = False                            # True or False
+    Problem_Type = "stochastic_gauss_zoh"       # "deterministic" or "stochastic_gauss_zoh"
+    hot_start = True                            # True or False
 
     # ---------------------------------------------------------------------------
     config_file = r"Scenarios/"+folder_name+"/config.yaml"
