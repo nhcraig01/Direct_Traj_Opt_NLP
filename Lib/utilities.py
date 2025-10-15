@@ -312,7 +312,6 @@ def prepare_sol(solution, Sys, Boundary_Conds, propagators, dyn_args, cfg_args):
     output['Orbf']['t_hst'] = Boundary_Conds['Orbf']['t_hst']
 
     output['Det'] = sim_Det_traj(solution, Sys, propagators, dyn_args, cfg_args)
-    output['Det']['t_node_bound'] = t_node_bound
 
     # Run Monte Carlo Simulations
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
@@ -324,24 +323,10 @@ def prepare_sol(solution, Sys, Boundary_Conds, propagators, dyn_args, cfg_args):
         rng_seed = 0
 
         output['MC_Runs'] = sim_MC_trajs(inputs, rng_seed, dyn_args, cfg_args, propagators['propagator_e'], n_jobs = 8)
-        """
-        X_hsts = np.empty((cfg_args.N_trials,cfg_args.nodes*(cfg_args.int_save-1)+1,7))
-        U_hsts = np.empty((cfg_args.N_trials,cfg_args.nodes*(cfg_args.int_save-1)+1,3))
-        U_hsts_sph = np.empty((cfg_args.N_trials,cfg_args.nodes*(cfg_args.int_save-1)+1,3))
-        t_hsts = np.empty((cfg_args.N_trials,cfg_args.nodes*(cfg_args.int_save-1)+1))
-        for i in range(cfg_args.N_trials):
-            X_hsts[i], U_hsts[i], U_hsts_sph[i], t_hsts[i] = MC_worker_par(i, inputs, rng_seed, dyn_args, cfg_args, propagators['propagator_e'])
-
-        output['MC_Runs'] = {}
-        output['MC_Runs']['X_hsts'] = X_hsts
-        output['MC_Runs']['U_hsts'] = U_hsts
-        output['MC_Runs']['U_hsts_sph'] = U_hsts_sph
-        output['MC_Runs']['t_hsts'] = t_hsts
-        """
 
     return output
     
-def save_sol(output, Sys, save_loc: str, cfg_args):
+def save_sol(output, Sys, save_loc: str, dyn_args, cfg_args):
     with h5py.File(save_loc+"data.h5", "w") as f:
         f.create_dataset("Name", data=output['Name'])
         f.create_dataset("Det_or_stoch", data=cfg_args.det_or_stoch)
@@ -351,7 +336,8 @@ def save_sol(output, Sys, save_loc: str, cfg_args):
         f.create_dataset("Orbf_t_hst", data=output['Orbf']['t_hst'])
         f.create_dataset("Det_X_hst", data=output['Det']['X_hst'])
         f.create_dataset("Det_t_hst", data=output['Det']['t_hst'])
-        f.create_dataset("Det_t_node_bound", data=output['Det']['t_node_bound'])
+        f.create_dataset("Det_X_node_hst", data=output['Det']['X_node_hst'])
+        f.create_dataset("Det_t_node_hst", data=output['Det']['t_node_hst'])
         f.create_dataset("Det_U_hst", data=output['Det']['U_hst'])
         f.create_dataset("Det_U_hst_sph", data=output['Det']['U_hst_sph'])
         f.create_dataset("Det_dV", data=output['Det']['dV'])
@@ -361,7 +347,7 @@ def save_sol(output, Sys, save_loc: str, cfg_args):
             f.create_dataset("Det_B_ks", data=output['Det']['B_ks'])
             f.create_dataset("Det_K_ks", data=output['Det']['K_ks'])
             f.create_dataset("Det_P_ks", data=output['Det']['P_ks'])
-
+            f.create_dataset("Det_P_Xf_targ", data=dyn_args['targ_cov'])
             f.create_dataset("MC_X_hsts", data=output['MC_Runs']['X_hsts'])
             f.create_dataset("MC_t_hsts", data=output['MC_Runs']['t_hsts'])
             f.create_dataset("MC_U_hsts", data=output['MC_Runs']['U_hsts'])

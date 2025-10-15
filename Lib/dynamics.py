@@ -90,7 +90,8 @@ def CR3BPDynamics(U_Acc_min_nd, ve, mu, safe_d):
 # ------------------
 
 def gates2Gexe(U, gates):
-    norm_U = jnp.sqrt(U[0]**2 + U[1]**2 + U[2]**2 + 1e-12)
+    eps = 1e-12
+    norm_U = jnp.sqrt(U[0]**2 + U[1]**2 + U[2]**2 + eps)
     cov_1 = gates[2]**2 + (gates[3]*norm_U)**2
     cov_3 = gates[0]**2 + (gates[1]*norm_U)**2
     P_exe = jnp.diag(jnp.array([cov_1, cov_1, cov_3])) # control execution covariance matrix (in SC frame)
@@ -98,10 +99,10 @@ def gates2Gexe(U, gates):
     # Transform to rotating frame
     Z_hat = U.flatten()/norm_U
     E_vec = jnp.cross(jnp.array([0.,0.,1.]), Z_hat.flatten())
-    E_hat = E_vec / jnp.sqrt(E_vec[0]**2 + E_vec[1]**2 + E_vec[2]**2 + 1e-12)
+    E_hat = E_vec / jnp.sqrt(E_vec[0]**2 + E_vec[1]**2 + E_vec[2]**2 + eps)
 
     S_vec = jnp.cross(E_hat, Z_hat)
-    S_hat = S_vec / jnp.sqrt(S_vec[0]**2 + S_vec[1]**2 + S_vec[2]**2 + 1e-12)
+    S_hat = S_vec / jnp.sqrt(S_vec[0]**2 + S_vec[1]**2 + S_vec[2]**2 + eps)
 
     rot_mat = jnp.column_stack([S_hat, E_hat, Z_hat])
 
@@ -197,7 +198,7 @@ def propagator_gen(X0, U, t0, t1, EOM, cfg_args, G_stoch=None):
                             stepsize_controller=stepsize_controller, 
                             adjoint=dfx.DirectAdjoint(),
                             saveat=save_t,
-                            max_steps=16**3)
+                            max_steps=16**4)
     
     return sol
 
@@ -231,7 +232,7 @@ def propagator_gen_fin(X0, U, t0, t1, EOM, cfg_args, G_stoch=None):
                             stepsize_controller=stepsize_controller, 
                             adjoint=dfx.DirectAdjoint(),
                             saveat=save_t,
-                            max_steps=16**3)
+                            max_steps=16**4)
     
     return sol.ys[-1].flatten()
 
@@ -376,7 +377,6 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, dyn_args, cfg_a
     X0 = inputs['X0']
     Xf = inputs['Xf']
     controls = inputs['controls'].reshape(nodes,3)
-
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
         xis = inputs['xis'].reshape(nodes,2)
     if cfg_args.free_phasing:
@@ -445,7 +445,8 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, dyn_args, cfg_a
         # jax.debug.print("P_ks[-1,:,:]: {}", P_ks[-1,:,:])
 
     # Objective and Constraints ouputs
-    control_norms = jnp.sqrt(controls[:, 0]**2 + controls[:, 1]**2 + controls[:, 2]**2 + 1e-12)
+    eps = 1e-12
+    control_norms = jnp.sqrt(controls[:, 0]**2 + controls[:, 1]**2 + controls[:, 2]**2 + eps)
     J_det = jnp.sum(control_norms)
     if cfg_args.det_or_stoch.lower() == 'deterministic':
         output_dict['o_mf'] = J_det # obejective - minimizing sum of control norms
@@ -465,6 +466,13 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, dyn_args, cfg_a
         # jax.debug.print("Max eig P_Xf: {}", mat_lmax(P_Xf))
         # jax.debug.print("c_P_Xf: {}", output_dict['c_P_Xf'])
 
+    if cfg_args.free_phasing:
+        output_dict['c_X0'] = X0[:7] - jnp.hstack([X_start.evaluate(alpha).flatten(), 1.]) # constraint - X0
+        output_dict['c_Xf'] = Xf[:6] - X_end.evaluate(beta).flatten() # constraint - Xf
+    else: 
+        output_dict['c_X0'] = X0[:7] - jnp.hstack([X_start, 1.]) # constraint - X0
+        output_dict['c_Xf'] = Xf[:6] - X_end.flatten() # constraint - Xf
+
     output_dict['c_X_mp'] = states[indx_f[-1], -1, :7] - states[indx_b[-1], 0, :7] # constraint - state match point    
     
     node_states = jnp.zeros((nodes+1, 7))
@@ -479,13 +487,6 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, dyn_args, cfg_a
         
     # still need to add stochastic col avoidance
     
-    
-    if cfg_args.free_phasing:
-        output_dict['c_X0'] = X0[:7] - jnp.hstack([X_start.evaluate(alpha).flatten(), 1.]) # constraint - X0
-        output_dict['c_Xf'] = Xf[:6] - X_end.evaluate(beta).flatten() # constraint - Xf
-    else: 
-        output_dict['c_X0'] = X0[:7] - jnp.hstack([X_start, 1.]) # constraint - X0
-        output_dict['c_Xf'] = Xf[:6] - X_end.flatten() # constraint - Xf
     if cfg_args.det_or_stoch.lower() == 'deterministic':
         base_str = "J: {:.2e},    X0: {:.2e},    Xf: {:.2e},    X_mp: {:.2e},    Col: {:.2e}"
 
@@ -572,7 +573,7 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
     dt = t_hst[1] - t_hst[0]
     dV = jnp.sum(jnp.linalg.norm(U_hst, axis=1)*cfg_args.T_max_nd*dt / X_hst[:,-1])*Sys['Vs']
 
-    output_dict = {'X_hst': X_hst, 'X_node_hst': X_node_hst, 'U_hst': U_hst, 'U_node_hst': U_node_hst, 't_hst': t_hst, 'U_hst_sph': U_hst_sph, 'dV': dV}
+    output_dict = {'X_hst': X_hst, 'X_node_hst': X_node_hst, 'U_hst': U_hst, 'U_node_hst': U_node_hst, 't_hst': t_hst, 't_node_hst': t_node_bound, 'U_hst_sph': U_hst_sph, 'dV': dV}
 
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
         output_dict['A_ks'] = A_ks
@@ -639,9 +640,24 @@ def MC_worker_par(id, inputs, seed, dyn_args, cfg_args, propagator):
 
 def sim_MC_trajs(inputs, seed, dyn_args, cfg_args, propagator, n_jobs = 8):
 
-    results = Parallel(n_jobs=n_jobs, prefer="threads",verbose=1)(delayed(MC_worker_par)(i, inputs, seed, dyn_args, cfg_args, propagator) for i in tqdm(range(cfg_args.N_trials)))
+    # results = Parallel(n_jobs=n_jobs, prefer="threads",verbose=1)(delayed(MC_worker_par)(i, inputs, seed, dyn_args, cfg_args, propagator) for i in tqdm(range(cfg_args.N_trials)))
 
-    X_hsts, U_hsts, U_hsts_sph, t_hsts = zip(*results)
+    # X_hsts, U_hsts, U_hsts_sph, t_hsts = zip(*results)
+    jax.debug.print("Running {} MC trials...".format(cfg_args.N_trials))
+    for k in range(cfg_args.N_trials):
+        X_hst, U_hst, U_hst_sph, t_hst = single_MC_trial(jax.random.PRNGKey(seed + k), inputs, dyn_args, cfg_args, propagator)
+        if k == 0:
+            X_hsts = np.array(X_hst)[np.newaxis, :, :]
+            U_hsts = np.array(U_hst)[np.newaxis, :, :]
+            U_hsts_sph = np.array(U_hst_sph)[np.newaxis, :, :]
+            t_hsts = np.array(t_hst)[np.newaxis, :]
+        else:
+            X_hsts = np.vstack((X_hsts, np.array(X_hst)[np.newaxis, :, :]))
+            U_hsts = np.vstack((U_hsts, np.array(U_hst)[np.newaxis, :, :]))
+            U_hsts_sph = np.vstack((U_hsts_sph, np.array(U_hst_sph)[np.newaxis, :, :]))
+            t_hsts = np.vstack((t_hsts, np.array(t_hst)[np.newaxis, :]))
+        
+        jax.debug.print("Completed trial {}/{}", k+1, cfg_args.N_trials)
 
     output_dict = {'X_hsts': np.array(X_hsts), 
                    't_hsts': np.array(t_hsts), 

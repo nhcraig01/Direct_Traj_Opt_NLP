@@ -1,15 +1,16 @@
 ---
-name: "L1 N-HO to L2 N-HO Transfer - Deterministic"
+name: "L1 N-HO to L2 N-HO Transfer"
 description: "Northern Halo to Halo transfer with small execution errors and small initial/final covariance, limited phasing"
 dynamics:
   type: "CR3BP"
   sys_param_file: '../CR3BP_dev/EarthMoon_System/EMsys.yaml'
 integration:
-  a_tol: 1.e-12
-  r_tol: 1.e-12
-  int_save: 2
+  a_tol: 1.e-13
+  r_tol: 1.e-13
+  int_save: 32
   mc_div: 2
 segments: 41
+MC_trials: 64
 boundary_conditions:
   t0: "2026-01-01T00:00:00"
   tf: "2026-02-01T00:00:00"
@@ -63,10 +64,10 @@ constraints:
         beta: 2.0
         kappa: 4.0
 SNOPT:
-  major_opt_tol: 1.e-4
-  major_feas_tol: 1.e-6
+  major_opt_tol: 1.e-3 # Change this one for speed/accuracy tradeoff
+  major_feas_tol: 1.e-8
   minor_feas_tol: 1.e-6
   major_iter_limit: 10000
   partial_price: 1
   linesearch_tol: .99
-  function_prec: 1e-11
+  function_prec: 1e-12

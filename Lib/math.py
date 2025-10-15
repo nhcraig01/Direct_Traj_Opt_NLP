@@ -35,7 +35,8 @@ def mat_sqrt(A):
     return jnp.linalg.cholesky(A)
 
 def mat_lmax(A):
-    return jnp.linalg.eigvalsh(A + 1e-12*jnp.diag(jnp.linspace(1.,2.,A.shape[0])))[-1]
+    eps = 1e-12
+    return jnp.linalg.eigvalsh(A + eps*jnp.diag(jnp.linspace(1.,2.,A.shape[0])))[-1]
 
 mat_lmax_vmap = jax.vmap(mat_lmax, in_axes=(0))
 

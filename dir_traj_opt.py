@@ -4,20 +4,12 @@ import jax
 jax.config.update('jax_enable_x64', True)
 import jax.numpy as jnp
 
-import numpy as np
-
 from pyoptsparse.pySNOPT.pySNOPT import SNOPT
 from pyoptsparse import Optimization
 
 import time
-from tqdm import tqdm
-
-from scipy.interpolate import interp1d
-from scipy.stats import chi2, norm
 
 from dataclasses import replace
-
-import h5py
 
 # Utilities
 from Lib.utilities import yaml_load, process_config, process_sparsity, prepare_prop_funcs, prepare_opt_funcs, prepare_sol, save_sol, save_OptimizerSol, load_OptimizerSol
@@ -31,9 +23,9 @@ from Lib.dynamics import eoms_gen, propagator_gen, propagator_gen_fin
 if __name__ == "__main__":
 
     # Configuration Files -------------------------------------------------------
-    folder_name = "L2_S-NRHO_to_L2_N-NRHO"
-    Problem_Type = "stochastic_gauss_zoh"       # "deterministic" or "stochastic_gauss_zoh"
-    hot_start = True                    # True or False
+    folder_name = "L1_N-HO_to_L2_N-HO"
+    Problem_Type = "deterministic"       # "deterministic" or "stochastic_gauss_zoh"
+    hot_start = False                            # True or False
 
     # ---------------------------------------------------------------------------
     config_file = r"Scenarios/"+folder_name+"/config.yaml"
@@ -86,9 +78,9 @@ if __name__ == "__main__":
 
     # Optimal Control Problem
     optprop = Optimization("Forward Backward Direct Trajectory Optimization", vals)
-    optprop.addVarGroup('controls', 3*cfg_args.nodes, "c", value = init_guess['controls'], lower = -1, upper = 1)
     optprop.addVarGroup('X0', 7, "c", value = init_guess['X0'], lower=[-10, -10, -10, -10, -10, -10, 1e-1], upper=[10, 10, 10, 10, 10, 10, 1])
     optprop.addVarGroup('Xf', 7, "c", value = init_guess['Xf'], lower=[-10, -10, -10, -10, -10, -10, 1e-1], upper=[10, 10, 10, 10, 10, 10, 1])
+    optprop.addVarGroup('controls', 3*cfg_args.nodes, "c", value = init_guess['controls'], lower = -1, upper = 1)
     if Problem_Type == 'stochastic_gauss_zoh':
         optprop.addVarGroup('xis', 2*cfg_args.nodes, "c", value = init_guess['xis'], lower = 1e-5)
     if cfg_args.free_phasing:
@@ -98,11 +90,11 @@ if __name__ == "__main__":
     optprop.addObj('o_mf')
 
     optprop.addConGroup('c_Us', cfg_args.nodes, upper = 1, jac = grad_proc_sparse['c_Us'])
+    if Problem_Type == 'stochastic_gauss_zoh':
+        optprop.addConGroup('c_P_Xf', 1, upper = 0, jac = grad_proc_sparse['c_P_Xf'])
     optprop.addConGroup('c_X0', 7, lower = 0, upper = 0, jac = grad_proc_sparse['c_X0'])
     optprop.addConGroup('c_Xf', 6, lower = 0, upper = 0, jac = grad_proc_sparse['c_Xf'])
     optprop.addConGroup('c_X_mp', 7, lower = 0, upper = 0, jac = grad_proc_sparse['c_X_mp'])
-    if Problem_Type == 'stochastic_gauss_zoh':
-        optprop.addConGroup('c_P_Xf', 1, upper = 0, jac = grad_proc_sparse['c_P_Xf'])
     if cfg_args.det_col_avoid:
         optprop.addConGroup('c_det_col_avoid', cfg_args.N, upper = 0, jac = grad_proc_sparse['c_det_col_avoid'])
     
@@ -118,6 +110,6 @@ if __name__ == "__main__":
 
     # Analyze and Save Results
     allData = prepare_sol(sol, Sys, Boundary_Conds, propagators, dyn_args, cfg_args)
-    save_sol(allData, Sys, save_file, cfg_args)
+    save_sol(allData, Sys, save_file,dyn_args, cfg_args)
 
 
