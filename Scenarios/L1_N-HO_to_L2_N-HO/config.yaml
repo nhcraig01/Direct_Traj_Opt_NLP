@@ -10,7 +10,7 @@ integration:
   int_save: 32
   mc_div: 2
 segments: 41
-MC_trials: 64
+MC_trials: 500
 boundary_conditions:
   t0: "2026-01-01T00:00:00"
   tf: "2026-02-01T00:00:00"
@@ -65,9 +65,9 @@ constraints:
         kappa: 4.0
 SNOPT:
   major_opt_tol: 1.e-3 # Change this one for speed/accuracy tradeoff
-  major_feas_tol: 1.e-8
+  major_feas_tol: 1.e-6
   minor_feas_tol: 1.e-6
   major_iter_limit: 10000
-  partial_price: 1
-  linesearch_tol: .99
-  function_prec: 1e-12
+  partial_price: 1 # Impacts the number of variables SNOPT changes each iterations
+  linesearch_tol: 1.e-3 # Impacts how large of a step SNOPT takes in the variables per iterations
+  function_prec: 1.e-11

@@ -49,6 +49,75 @@ def load_family(input_loc: str) -> dict:
 # Misc
 # -----
 
+def process_jac_ordered(jax_jac_fun, func_order, var_order):
+    """
+    Wrap a JAX jacobian-producing function so it returns a sparse-ish
+    nested dict where missing (func,var) blocks are simply omitted.
+
+    Parameters
+    ----------
+    jax_jac_fun : callable
+        Function that returns a nested dict of jacobians:
+        {func_name: {var_name: block}}
+        E.g., produced by jax.jacrev on a dict-returning objective/constraint fn.
+    func_order : list[tuple[str, int]]
+        [("obj",1), ("c_X0",7), ...]  (sizes used only to reshape if present)
+    var_order : list[tuple[str, int]]
+        [("X0",7), ("Xf",7), ("controls",3*nodes), ...]
+
+    Returns
+    -------
+    wrapped_fun : callable
+        Same call signature as jax_jac_fun. Returns:
+        {func_name: {var_name: jnp.ndarray of shape (m, n)}}
+        but ONLY includes keys actually present in jax_jac_fun's output.
+    """
+    fsize = dict(func_order)
+    vsize = dict(var_order)
+
+    def reshape_block(A, m, n):
+        A = jnp.asarray(A)
+        # Try to coerce to (m,n) when possible; otherwise raise clearly.
+        if A.ndim == 0:
+            if m * n == 1:
+                return jnp.reshape(A, (m, n))
+            raise ValueError(f"Scalar block cannot reshape to ({m},{n}).")
+        if A.ndim == 1:
+            if A.size == n and m == 1:
+                return A.reshape(1, n)
+            if A.size == m and n == 1:
+                return A.reshape(m, 1)
+            if A.size == m * n:
+                return A.reshape(m, n)
+            raise ValueError(f"1D block of size {A.size} incompatible with ({m},{n}).")
+        if A.ndim == 2:
+            if A.shape == (m, n):
+                return A
+            if A.size == m * n:
+                return A.reshape(m, n)
+            raise ValueError(f"Got {A.shape}, expected ({m},{n}).")
+        raise ValueError(f"Unexpected ndim {A.ndim} for jacobian block.")
+
+    def wrapped_fun(*args, **kwargs):
+        grad_raw = jax_jac_fun(*args, **kwargs)  # nested dict
+        out = {}
+        for fname, _ in func_order:
+            row = grad_raw.get(fname, None)
+            if row is None:
+                continue  # skip missing function entirely
+            shaped_row = {}
+            for vname, _ in var_order:
+                blk = row.get(vname, None)
+                if blk is None:
+                    continue  # skip missing variable block
+                m, n = fsize[fname], vsize[vname]
+                shaped_row[vname] = reshape_block(blk, m, n)
+            if shaped_row:
+                out[fname] = shaped_row
+        return out
+
+    return wrapped_fun
+
 def process_sparsity(grad_nonsparse):
     grad_sparse = {}
     
@@ -56,6 +125,7 @@ def process_sparsity(grad_nonsparse):
         cur_obj_constr = val
         new_obj_constr = {}
         for key2, val2_jax in cur_obj_constr.items():
+            """
             val2 = np.array(val2_jax)
             
             if len(val2.shape) != 2:
@@ -65,7 +135,8 @@ def process_sparsity(grad_nonsparse):
                     new_obj_constr[key2] = val2.reshape(-1,1)
             else:
                 new_obj_constr[key2] = val2
-            
+            """
+            new_obj_constr[key2] = val2_jax
             if jnp.all(new_obj_constr[key2] == 0):
                 new_obj_constr.pop(key2, None)
         
@@ -206,7 +277,7 @@ def process_config(config, problem_type: str):
                   'Linesearch tolerance': config['SNOPT']['linesearch_tol'],
                   'Function precision': config['SNOPT']['function_prec'],
                   'Verify level': -1,
-                  'Nonderivative linesearch': 1}
+                  'Nonderivative linesearch': 0}
 
     # Choose Dynamics
     if config['dynamics']['type'] == 'CR3BP':
@@ -285,14 +356,15 @@ def prepare_prop_funcs(eoms_gen, dynamics, propagator_gen, propagator_gen_fin, d
     iterators['backward_propagation_iterate_e'] = backward_propagation_iterate_e
     return eom_e, propagators, iterators
 
-def prepare_opt_funcs(Boundary_Conds, iterators, dyn_args, cfg_args):
+def prepare_opt_funcs(Boundary_Conds, iterators, var_order, objcon_order, dyn_args, cfg_args):
 
     func = lambda inputs: objective_and_constraints(inputs, Boundary_Conds, iterators, dyn_args, cfg_args)
     vals = jax.jit(func, backend='cpu')
     grad = jax.jit(jax.jacfwd(func), backend='cpu')
-    sens = jax.jit(lambda inputs, cvals: grad(inputs), backend='cpu')
+    grad_ordered = process_jac_ordered(grad, objcon_order, var_order)
+    sens = jax.jit(lambda inputs, cvals: grad_ordered(inputs), backend='cpu')
 
-    return vals, grad, sens
+    return vals, grad, grad_ordered, sens
 
 def prepare_sol(solution, Sys, Boundary_Conds, propagators, dyn_args, cfg_args):
     

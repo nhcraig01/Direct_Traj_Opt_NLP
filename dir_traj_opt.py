@@ -43,8 +43,20 @@ if __name__ == "__main__":
     # Propagation functions
     eom_e, propagators, iterators = prepare_prop_funcs(eoms_gen, dynamics, propagator_gen, propagator_gen_fin, dyn_args, replace(cfg_args, int_save=2))
 
-    # Optimization functions
-    vals, grad, sens = prepare_opt_funcs(Boundary_Conds, iterators, dyn_args, replace(cfg_args, int_save=2))
+    # Generate Objective and Contraint Function and Gradients
+    var_order = [('X0', 7), 
+                 ('Xf', 7), 
+                 ('controls', 3*cfg_args.nodes), 
+                 ('alpha', 1), ('beta', 1), 
+                 ('xis', 2*cfg_args.nodes)]
+    objcon_order = [('o_mf', 1),
+                    ('c_Us', cfg_args.nodes),
+                    ('c_X0', 7),
+                    ('c_Xf', 6),
+                    ('c_X_mp', 7),
+                    ('c_P_Xf', 1),
+                    ('c_det_col_avoid', cfg_args.N)]
+    vals, grad, grad_ordered, sens = prepare_opt_funcs(Boundary_Conds, iterators, var_order, objcon_order, dyn_args, replace(cfg_args, int_save=2))
     
     # Create Sparse Jacobians
     print("Calculating SNOPT Gradient Sparsity")
@@ -56,7 +68,7 @@ if __name__ == "__main__":
         sparse_inputs['beta'] = 0.1
     if Problem_Type == 'stochastic_gauss_zoh':
         sparse_inputs['xis'] = 0.01*jnp.ones(2*cfg_args.nodes)
-    grad_nonsparse = grad(sparse_inputs)
+    grad_nonsparse = grad_ordered(sparse_inputs)
     grad_proc_sparse = process_sparsity(grad_nonsparse)
 
 
@@ -88,13 +100,12 @@ if __name__ == "__main__":
         optprop.addVarGroup('beta', 1, "c", value = init_guess['beta'], lower = Boundary_Conds['beta_min'], upper = Boundary_Conds['beta_max'])
 
     optprop.addObj('o_mf')
-
     optprop.addConGroup('c_Us', cfg_args.nodes, upper = 1, jac = grad_proc_sparse['c_Us'])
-    if Problem_Type == 'stochastic_gauss_zoh':
-        optprop.addConGroup('c_P_Xf', 1, upper = 0, jac = grad_proc_sparse['c_P_Xf'])
     optprop.addConGroup('c_X0', 7, lower = 0, upper = 0, jac = grad_proc_sparse['c_X0'])
     optprop.addConGroup('c_Xf', 6, lower = 0, upper = 0, jac = grad_proc_sparse['c_Xf'])
     optprop.addConGroup('c_X_mp', 7, lower = 0, upper = 0, jac = grad_proc_sparse['c_X_mp'])
+    if Problem_Type == 'stochastic_gauss_zoh':
+        optprop.addConGroup('c_P_Xf', 1, upper = 0, jac = grad_proc_sparse['c_P_Xf'])
     if cfg_args.det_col_avoid:
         optprop.addConGroup('c_det_col_avoid', cfg_args.N, upper = 0, jac = grad_proc_sparse['c_det_col_avoid'])
     

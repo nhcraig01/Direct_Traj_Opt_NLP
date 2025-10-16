@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+from jax_tqdm import loop_tqdm
 import numpy as np
 import diffrax as dfx
 import sympy as sp
@@ -196,7 +197,7 @@ def propagator_gen(X0, U, t0, t1, EOM, cfg_args, G_stoch=None):
                             X0, 
                             args=U,
                             stepsize_controller=stepsize_controller, 
-                            adjoint=dfx.DirectAdjoint(),
+                            adjoint=dfx.ForwardMode(),
                             saveat=save_t,
                             max_steps=16**4)
     
@@ -230,7 +231,7 @@ def propagator_gen_fin(X0, U, t0, t1, EOM, cfg_args, G_stoch=None):
                             X0, 
                             args=U,
                             stepsize_controller=stepsize_controller, 
-                            adjoint=dfx.DirectAdjoint(),
+                            adjoint=dfx.ForwardMode(),
                             saveat=save_t,
                             max_steps=16**4)
     
@@ -616,7 +617,6 @@ def single_MC_trial(rng_key, inputs, dyn_args, cfg_args, propagator):
         U_k_det = det_U_node_hst[k,:]
         U_k_tcm = MC_U_tcm_k(X_k_det, X_k, K_ks[k,:,:])
         U_k_exe = MC_U_exe(U_k_det, dyn_args['gates'], keys_U_exe[k])
-        #jax.debug.print("U_k_exe: {}, U_k_tcm: {}", U_k_exe, U_k_tcm)
         U_k = U_k_det + U_k_tcm + U_k_exe
 
         sol_f = propagator(X_k, U_k, t_node_bound[k], t_node_bound[k+1], cfg_args)
@@ -639,26 +639,13 @@ def MC_worker_par(id, inputs, seed, dyn_args, cfg_args, propagator):
     return np.array(X_hst), np.array(U_hst), np.array(U_hst_sph), np.array(t_hst)
 
 def sim_MC_trajs(inputs, seed, dyn_args, cfg_args, propagator, n_jobs = 8):
+    N = cfg_args.N_trials
+    keys = jax.random.split(jax.random.PRNGKey(seed), N)
 
-    # results = Parallel(n_jobs=n_jobs, prefer="threads",verbose=1)(delayed(MC_worker_par)(i, inputs, seed, dyn_args, cfg_args, propagator) for i in tqdm(range(cfg_args.N_trials)))
-
-    # X_hsts, U_hsts, U_hsts_sph, t_hsts = zip(*results)
-    jax.debug.print("Running {} MC trials...".format(cfg_args.N_trials))
-    for k in range(cfg_args.N_trials):
-        X_hst, U_hst, U_hst_sph, t_hst = single_MC_trial(jax.random.PRNGKey(seed + k), inputs, dyn_args, cfg_args, propagator)
-        if k == 0:
-            X_hsts = np.array(X_hst)[np.newaxis, :, :]
-            U_hsts = np.array(U_hst)[np.newaxis, :, :]
-            U_hsts_sph = np.array(U_hst_sph)[np.newaxis, :, :]
-            t_hsts = np.array(t_hst)[np.newaxis, :]
-        else:
-            X_hsts = np.vstack((X_hsts, np.array(X_hst)[np.newaxis, :, :]))
-            U_hsts = np.vstack((U_hsts, np.array(U_hst)[np.newaxis, :, :]))
-            U_hsts_sph = np.vstack((U_hsts_sph, np.array(U_hst_sph)[np.newaxis, :, :]))
-            t_hsts = np.vstack((t_hsts, np.array(t_hst)[np.newaxis, :]))
-        
-        jax.debug.print("Completed trial {}/{}", k+1, cfg_args.N_trials)
-
+    jax.debug.print("Running {} MC Trials...", N)
+    MC_Batched = jax.vmap(single_MC_trial, in_axes=(0,None,None,None,None))
+    X_hsts, U_hsts, U_hsts_sph, t_hsts = MC_Batched(keys, inputs, dyn_args, cfg_args, propagator)
+            
     output_dict = {'X_hsts': np.array(X_hsts), 
                    't_hsts': np.array(t_hsts), 
                    'U_hsts': np.array(U_hsts), 
