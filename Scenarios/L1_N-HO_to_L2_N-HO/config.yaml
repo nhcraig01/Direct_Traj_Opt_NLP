@@ -5,12 +5,12 @@ dynamics:
   type: "CR3BP"
   sys_param_file: '../CR3BP_dev/EarthMoon_System/EMsys.yaml'
 integration:
-  a_tol: 1.e-13
-  r_tol: 1.e-13
+  a_tol: 1.e-14
+  r_tol: 1.e-14
   int_save: 32
   mc_div: 2
 segments: 41
-MC_trials: 64
+MC_trials: 1000
 boundary_conditions:
   t0: "2026-01-01T00:00:00"
   tf: "2026-02-01T00:00:00"
@@ -43,7 +43,7 @@ uncertainty:
       pos_sig: 10
       vel_sig: .02
       mass_sig: 60
-  acc_sig: 1.e-11
+  acc_sig: 5.e-12
   gates:
     fixed_mag: 1.e-3
     prop_mag: 1.e-3
@@ -64,10 +64,10 @@ constraints:
         beta: 2.0
         kappa: 4.0
 SNOPT:
-  major_opt_tol: 1.e-3 # Change this one for speed/accuracy tradeoff
-  major_feas_tol: 1.e-8
+  major_opt_tol: 1.e-5 # Pretty much always keep this at 1.e-5 (linesearch_tol is more important)
+  major_feas_tol: 1.e-6
   minor_feas_tol: 1.e-6
-  major_iter_limit: 10000
-  partial_price: 1
-  linesearch_tol: .99
-  function_prec: 1e-12
+  major_iter_limit: 5000
+  partial_price: 1  # 1 for deterministic, 10 for stochastic
+  linesearch_tol: .01 # .99 for deterministic, .05 for stochastic
+  function_prec: 1e-13

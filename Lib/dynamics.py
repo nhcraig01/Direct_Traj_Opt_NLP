@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+from scipy.stats import chi2
 import numpy as np
 import diffrax as dfx
 import sympy as sp
@@ -361,7 +362,7 @@ def forward_propagation_cov_iterate(i, input_dict, dyn_args, cfg_args):
 
 
 # -----------------------------------
-# Constraint and Objective Functions
+# Constraint and Objective Function
 # -----------------------------------
 
 def objective_and_constraints(inputs, Boundary_Conds, iterators, dyn_args, cfg_args):
@@ -452,7 +453,7 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, dyn_args, cfg_a
         output_dict['o_mf'] = J_det # obejective - minimizing sum of control norms
         output_dict['c_Us'] = control_norms # constraint - control norm
     elif cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
-        control_max_eig = cfg_args.mx * jnp.sqrt(mat_lmax_vmap(P_Us))
+        control_max_eig = cfg_args.mx_tcm_bound * jnp.sqrt(mat_lmax_vmap(P_Us))
 
         J_stat = jnp.sum(control_max_eig)
         output_dict['o_mf'] = J_det + J_stat # obejective - minimizing sum of control norms and max eigenvalues of control covariances
@@ -527,10 +528,16 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
     U_hst = jnp.zeros((length, 3))
     t_hst = jnp.zeros((length,))
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
+        TCM_norm_bound_hst = jnp.zeros((length,))
+        TCM_norm_dV_hst = jnp.zeros((length,))
+        U_norm_bound_hst = jnp.zeros((length,))
+        U_norm_dV_hst = jnp.zeros((length,))
         A_ks = jnp.zeros((cfg_args.nodes, 7, 7))
         B_ks = jnp.zeros((cfg_args.nodes, 7, 3))
         K_ks = jnp.zeros((cfg_args.nodes, 3, 7))
         P_ks = jnp.zeros((cfg_args.nodes+1, 7, 7))
+        P_us = jnp.zeros((cfg_args.nodes, 3, 3))
+        
 
     X_hst = X_hst.at[0,:].set(X0_det)
     X_node_hst = X_node_hst.at[0,:].set(X0_det)
@@ -566,34 +573,67 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
             P_k1 = mod_A @ P_k @ mod_A.T + B_k @ (dyn_args['G_stoch'] + gates2Gexe(U_k, dyn_args['gates'])) @ B_k.T
             P_ks = P_ks.at[k+1,:,:].set(P_k1)
 
+            P_uk = K_k @ P_k @ K_k.T
+            P_us = P_us.at[k,:,:].set(P_uk)
+
+            TCM_norm_bound_k = cfg_args.mx_tcm_bound*jnp.sqrt(mat_lmax(P_uk))
+            TCM_dV_k = cfg_args.mx_dV_bound*jnp.sqrt(mat_lmax(P_uk))
+            U_norm_bound_k = jnp.linalg.norm(U_k) + TCM_norm_bound_k
+            U_norm_dV_k = jnp.linalg.norm(U_k) + TCM_dV_k
+
+            TCM_norm_bound_hst = TCM_norm_bound_hst.at[ptr:ptr+cfg_args.int_save-1].set(jnp.tile(TCM_norm_bound_k, cfg_args.int_save-1))
+            TCM_norm_dV_hst = TCM_norm_dV_hst.at[ptr:ptr+cfg_args.int_save-1].set(jnp.tile(TCM_dV_k, cfg_args.int_save-1))
+            U_norm_bound_hst = U_norm_bound_hst.at[ptr:ptr+cfg_args.int_save-1].set(jnp.tile(U_norm_bound_k, cfg_args.int_save-1))
+            U_norm_dV_hst = U_norm_dV_hst.at[ptr:ptr+cfg_args.int_save-1].set(jnp.tile(U_norm_dV_k, cfg_args.int_save-1))
+
         ptr += cfg_args.int_save - 1
 
     U_hst_sph = cart2sph(U_hst)
 
-    dt = t_hst[1] - t_hst[0]
-    dV = jnp.sum(jnp.linalg.norm(U_hst, axis=1)*cfg_args.T_max_nd*dt / X_hst[:,-1])*Sys['Vs']
 
-    output_dict = {'X_hst': X_hst, 'X_node_hst': X_node_hst, 'U_hst': U_hst, 'U_node_hst': U_node_hst, 't_hst': t_hst, 't_node_hst': t_node_bound, 'U_hst_sph': U_hst_sph, 'dV': dV}
+    dt = t_hst[1] - t_hst[0]
+    dV_mean = jnp.sum(jnp.linalg.norm(U_hst, axis=1)*cfg_args.T_max_nd*dt / X_hst[:,-1])*Sys['Vs']
 
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
+        dV_stat = jnp.sum(TCM_norm_dV_hst*cfg_args.T_max_nd*dt / X_hst[:,-1])*Sys['Vs']
+        dV_bound = jnp.sum(U_norm_dV_hst*cfg_args.T_max_nd*dt / X_hst[:,-1])*Sys['Vs']
+
+    output_dict = {'X_hst': X_hst, 
+                   'X_node_hst': X_node_hst, 
+                   'U_hst': U_hst, 
+                   'U_node_hst': U_node_hst, 
+                   't_hst': t_hst, 
+                   't_node_hst': t_node_bound, 
+                   'U_hst_sph': U_hst_sph, 
+                   'dV_mean': dV_mean}
+
+    if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
+        output_dict['TCM_norm_dV_hst'] = TCM_norm_dV_hst
+        output_dict['TCM_norm_bound_hst'] = TCM_norm_bound_hst
+        output_dict['U_norm_dV_hst'] = U_norm_dV_hst
+        output_dict['U_norm_bound_hst'] = U_norm_bound_hst
+        output_dict['dV_stat'] = dV_stat
+        output_dict['dV_bound'] = dV_bound
         output_dict['A_ks'] = A_ks
         output_dict['B_ks'] = B_ks
         output_dict['K_ks'] = K_ks
         output_dict['P_ks'] = P_ks
+        output_dict['P_us'] = P_us
 
     return output_dict
 
-def single_MC_trial(rng_key, inputs, dyn_args, cfg_args, propagator):
+def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagator):
     # Unpack inputs
     t_node_bound = dyn_args['t_node_bound']
     det_X_node_hst = inputs['det_X_node_hst']
     det_U_node_hst = inputs['det_U_node_hst']
     K_ks = inputs['K_ks']
     P_k0 = dyn_args['init_cov']
+    dV_mean = inputs['dV_mean']
 
     # Create rng keys
-    keys = jax.random.split(rng_key, 1+cfg_args.nodes)
-    key_X0, keys_U_exe = keys[0], keys[1:]
+    keys = jax.random.split(rng_key, 1+2*cfg_args.nodes)
+    key_X0, keys_U_exe, keys_W_dyn = keys[0], keys[1:1+cfg_args.nodes], keys[1+cfg_args.nodes:1+2*cfg_args.nodes]
 
     # Initial state and controls
     X0_det = det_X_node_hst[0,:]
@@ -616,52 +656,72 @@ def single_MC_trial(rng_key, inputs, dyn_args, cfg_args, propagator):
         U_k_det = det_U_node_hst[k,:]
         U_k_tcm = MC_U_tcm_k(X_k_det, X_k, K_ks[k,:,:])
         U_k_exe = MC_U_exe(U_k_det, dyn_args['gates'], keys_U_exe[k])
+        
+        G_stoch_zero = jnp.all(jnp.isclose(dyn_args['G_stoch'], 0.0, atol = 1e-20))
+        U_k_w = jax.lax.cond(G_stoch_zero,
+                             lambda key: jnp.zeros(3,),
+                             lambda key: jax.random.multivariate_normal(key, jnp.zeros(3,), dyn_args['G_stoch']),
+                             keys_W_dyn[k])
+        
         #jax.debug.print("U_k_exe: {}, U_k_tcm: {}", U_k_exe, U_k_tcm)
-        U_k = U_k_det + U_k_tcm + U_k_exe
+        U_k_cmd = U_k_det + U_k_tcm
+        U_k_cmd_nsy = U_k_cmd + U_k_exe
+        U_k_tot = U_k_cmd_nsy + U_k_w
 
-        sol_f = propagator(X_k, U_k, t_node_bound[k], t_node_bound[k+1], cfg_args)
+        sol_f = propagator(X_k, U_k_tot, t_node_bound[k], t_node_bound[k+1], cfg_args)
 
         X_hst = X_hst.at[ptr+1:ptr+cfg_args.int_save,:].set(sol_f.ys[1:,:])
-        U_hst = U_hst.at[ptr:ptr+cfg_args.int_save-1,:].set(jnp.tile(U_k, (cfg_args.int_save-1,1)))
+        U_hst = U_hst.at[ptr:ptr+cfg_args.int_save-1,:].set(jnp.tile(U_k_cmd, (cfg_args.int_save-1,1)))
         t_hst = t_hst.at[ptr+1:ptr+cfg_args.int_save].set(sol_f.ts[1:])
 
         ptr += cfg_args.int_save - 1
     
     U_hst_sph = cart2sph(U_hst)
 
-    return X_hst, U_hst, U_hst_sph, t_hst
+    dt = t_hst[1] - t_hst[0]
+    dV_trial = jnp.sum(jnp.linalg.norm(U_hst, axis=1)*cfg_args.T_max_nd*dt / X_hst[:,-1])*Sys['Vs']
+    dV_tcm_trial = dV_trial - dV_mean
 
-def MC_worker_par(id, inputs, seed, dyn_args, cfg_args, propagator):
-    rng_key = jax.random.PRNGKey(seed + id)
 
-    X_hst, U_hst, U_hst_sph, t_hst = single_MC_trial(rng_key, inputs, dyn_args, cfg_args, propagator)
+    return X_hst, U_hst, U_hst_sph, t_hst, dV_trial, dV_tcm_trial
 
-    return np.array(X_hst), np.array(U_hst), np.array(U_hst_sph), np.array(t_hst)
+def sim_MC_trajs(inputs, seed, Sys, dyn_args, cfg_args, propagator):
 
-def sim_MC_trajs(inputs, seed, dyn_args, cfg_args, propagator, n_jobs = 8):
+    N = cfg_args.N_trials
+    keys = jax.random.split(jax.random.PRNGKey(seed), N)
 
-    # results = Parallel(n_jobs=n_jobs, prefer="threads",verbose=1)(delayed(MC_worker_par)(i, inputs, seed, dyn_args, cfg_args, propagator) for i in tqdm(range(cfg_args.N_trials)))
+    jax.debug.print("Running {} MC Trials...", N)
+    one_trial = lambda key: single_MC_trial(key, inputs, Sys, dyn_args, cfg_args, propagator)
+    MC_Batched = jax.jit(jax.vmap(one_trial), backend='cpu')
+    # X_hsts, U_hsts, U_hsts_sph, t_hsts, dVs = MC_Batched(keys, inputs, Sys, dyn_args, cfg_args, propagator)
 
-    # X_hsts, U_hsts, U_hsts_sph, t_hsts = zip(*results)
-    jax.debug.print("Running {} MC trials...".format(cfg_args.N_trials))
-    for k in range(cfg_args.N_trials):
-        X_hst, U_hst, U_hst_sph, t_hst = single_MC_trial(jax.random.PRNGKey(seed + k), inputs, dyn_args, cfg_args, propagator)
-        if k == 0:
-            X_hsts = np.array(X_hst)[np.newaxis, :, :]
-            U_hsts = np.array(U_hst)[np.newaxis, :, :]
-            U_hsts_sph = np.array(U_hst_sph)[np.newaxis, :, :]
-            t_hsts = np.array(t_hst)[np.newaxis, :]
-        else:
-            X_hsts = np.vstack((X_hsts, np.array(X_hst)[np.newaxis, :, :]))
-            U_hsts = np.vstack((U_hsts, np.array(U_hst)[np.newaxis, :, :]))
-            U_hsts_sph = np.vstack((U_hsts_sph, np.array(U_hst_sph)[np.newaxis, :, :]))
-            t_hsts = np.vstack((t_hsts, np.array(t_hst)[np.newaxis, :]))
-        
-        jax.debug.print("Completed trial {}/{}", k+1, cfg_args.N_trials)
+    length = cfg_args.nodes*(cfg_args.int_save-1)+1
+    X_hsts = jnp.zeros((N,length, 7))
+    U_hsts = jnp.zeros((N,length, 3))
+    U_hsts_sph = jnp.zeros((N,length, 3))
+    t_hsts = jnp.zeros((N,length,))
+    dVs = jnp.zeros((N,))
+    dV_tcms = jnp.zeros((N,))
 
-    output_dict = {'X_hsts': np.array(X_hsts), 
+    MC_N_Loop = 10
+    Loop_N = N // MC_N_Loop
+    for i in tqdm(range(Loop_N),):
+        rng0 = i*MC_N_Loop
+        rngf = (i+1)*MC_N_Loop
+        keys_loop = keys[rng0:rngf]
+        X_hst_i, U_hst_i, U_hst_sph_i, t_hst_i, dV_i, dV_tcms_i = MC_Batched(keys_loop)
+        X_hsts = X_hsts.at[rng0:rngf,:,:].set(X_hst_i)
+        U_hsts = U_hsts.at[rng0:rngf,:,:].set(U_hst_i)
+        U_hsts_sph = U_hsts_sph.at[rng0:rngf,:,:].set(U_hst_sph_i)
+        t_hsts = t_hsts.at[rng0:rngf,:].set(t_hst_i)
+        dVs = dVs.at[rng0:rngf].set(dV_i)
+        dV_tcms = dV_tcms.at[rng0:rngf].set(dV_tcms_i)
+
+    output_dict = {'X_hsts': np.array(X_hsts),
                    't_hsts': np.array(t_hsts), 
                    'U_hsts': np.array(U_hsts), 
-                   'U_hsts_sph': np.array(U_hsts_sph)}
+                   'U_hsts_sph': np.array(U_hsts_sph),
+                   'dVs': np.array(dVs),
+                   'dV_tcms': np.array(dV_tcms)}
 
     return output_dict

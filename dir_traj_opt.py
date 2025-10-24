@@ -23,14 +23,13 @@ from Lib.dynamics import eoms_gen, propagator_gen, propagator_gen_fin
 if __name__ == "__main__":
 
     # Configuration Files -------------------------------------------------------
-    folder_name = "L1_N-HO_to_L2_N-HO"
-    Problem_Type = "stochastic_gauss_zoh"       # "deterministic" or "stochastic_gauss_zoh"
-    hot_start = True                            # True or False
+    folder_name = "L2_S-NRHO_to_L2_N-NRHO"
+    Problem_Type = "deterministic"       # "deterministic" or "stochastic_gauss_zoh"
+    hot_start = False                            # True or False
 
     # ---------------------------------------------------------------------------
     config_file = r"Scenarios/"+folder_name+"/config.yaml"
     hot_start_file = r"Scenarios/"+folder_name+"/deterministic_sol.h5"
-
     save_file = r"Plotting/Scenarios/"+folder_name+"/"+Problem_Type+"/"
     OptimSol_save_file = r"Scenarios/"+folder_name+"/"+Problem_Type+"_sol.h5"
     # ---------------------------------------------------------------------------
@@ -69,7 +68,7 @@ if __name__ == "__main__":
         init_guess['alpha'] = Boundary_Conds['alpha_min']
         init_guess['beta'] = Boundary_Conds['beta_min']
     if Problem_Type == 'stochastic_gauss_zoh':
-        init_guess['xis'] = 1e-4*jnp.ones(2*cfg_args.nodes)
+        init_guess['xis'] = 1e-2*jnp.ones(2*cfg_args.nodes)
     if hot_start:
         sol_hot = load_OptimizerSol(hot_start_file)
         for key in sol_hot.keys():
@@ -78,9 +77,9 @@ if __name__ == "__main__":
 
     # Optimal Control Problem
     optprop = Optimization("Forward Backward Direct Trajectory Optimization", vals)
+    optprop.addVarGroup('controls', 3*cfg_args.nodes, "c", value = init_guess['controls'], lower = -1, upper = 1)
     optprop.addVarGroup('X0', 7, "c", value = init_guess['X0'], lower=[-10, -10, -10, -10, -10, -10, 1e-1], upper=[10, 10, 10, 10, 10, 10, 1])
     optprop.addVarGroup('Xf', 7, "c", value = init_guess['Xf'], lower=[-10, -10, -10, -10, -10, -10, 1e-1], upper=[10, 10, 10, 10, 10, 10, 1])
-    optprop.addVarGroup('controls', 3*cfg_args.nodes, "c", value = init_guess['controls'], lower = -1, upper = 1)
     if Problem_Type == 'stochastic_gauss_zoh':
         optprop.addVarGroup('xis', 2*cfg_args.nodes, "c", value = init_guess['xis'], lower = 1e-5)
     if cfg_args.free_phasing:
@@ -104,6 +103,7 @@ if __name__ == "__main__":
     sol = optSNOPT(optprop, sens = sens, timeLimit = None)
     print('SNOPT Finished: %s'%(sol.optInform['text']))
     print("Elapsed Time: %.3f" % (time.time() - start_time))
+
 
     # Save Optimization Solution
     save_OptimizerSol(sol, cfg_args, OptimSol_save_file)

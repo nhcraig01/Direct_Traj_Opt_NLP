@@ -6,7 +6,7 @@ from jax import numpy as jnp
 import diffrax as dfx
 
 from Lib.math import calc_t_elapsed_nd, sig2cov, cart2sph
-from Lib.dynamics import CR3BPDynamics, forward_propagation_iterate, backward_propagation_iterate, objective_and_constraints, forward_propagation_cov_iterate, sim_MC_trajs, sim_Det_traj, MC_worker_par
+from Lib.dynamics import CR3BPDynamics, forward_propagation_iterate, backward_propagation_iterate, objective_and_constraints, forward_propagation_cov_iterate, sim_MC_trajs, sim_Det_traj
 
 import functools as ft
 
@@ -178,12 +178,20 @@ def process_config(config, problem_type: str):
     fixed_point = config['uncertainty']['gates']['fixed_point'] # fraction
     prop_point = config['uncertainty']['gates']['prop_point'] # fraction
     
-    eps = config['uncertainty']['eps']
+    tcm_stat_bound = config['uncertainty']['tcm_stat_bound']
+    dV_bound = config['uncertainty']['dV_bound']
+    mx_tcm_bound = np.sqrt(chi2.ppf(tcm_stat_bound,3))
+    mx_dV_bound = np.sqrt(chi2.ppf(dV_bound,3))
     
     # Covariance Terms
     init_cov = sig2cov(r_1sig, v_1sig, m_1sig, Sys, m0)
     targ_cov = sig2cov(r_1sig_t, v_1sig_t, m_1sig_t, Sys, m0)
-    G_stoch = np.diag(np.array([a_err/Sys['As'], a_err/Sys['As'], a_err/Sys['As']])) # stochastic model error
+    U_dyn_err = (a_err/Sys['As'])/U_Acc_min_nd # Normalize against the minimum acceleration # This should be good
+    U_dyn_err = U_dyn_err/np.sqrt((t_node_bound[1]-t_node_bound[0])/32) # Scale by sqrt of time step (Wiener process)
+
+    # Pick up here, you were in the process of investigating scaling Jerry's brownian motion to your gauss zoh model
+
+    G_stoch = np.diag(np.array([U_dyn_err, U_dyn_err, U_dyn_err])) # stochastic model error
     gates = np.array([fixed_mag, prop_mag, fixed_point, prop_point])
 
     # Collision Avoidance
@@ -198,6 +206,7 @@ def process_config(config, problem_type: str):
     beta_UT = config['constraints']['col_avoid']['stat']['UT']['beta']
     kappa_UT = config['constraints']['col_avoid']['stat']['UT']['kappa']
     
+    # SNOPT Options
     optOptions = {"Major optimality tolerance": config['SNOPT']['major_opt_tol'],
                   "Major feasibility tolerance": config['SNOPT']['major_feas_tol'],
                   "Minor feasibility tolerance": config['SNOPT']['minor_feas_tol'],
@@ -206,7 +215,8 @@ def process_config(config, problem_type: str):
                   'Linesearch tolerance': config['SNOPT']['linesearch_tol'],
                   'Function precision': config['SNOPT']['function_prec'],
                   'Verify level': -1,
-                  'Nonderivative linesearch': 1}
+                  'Nonderivative linesearch': 0,
+                  'Elastic weight': 1.0e5}
 
     # Choose Dynamics
     if config['dynamics']['type'] == 'CR3BP':
@@ -236,11 +246,11 @@ def process_config(config, problem_type: str):
         alpha_UT: float
         beta_UT: float
         kappa_UT: float
-        eps_UT: float
-        mx: float
+        mx_tcm_bound: float
+        mx_dV_bound: float
     cfg_args = args_static(cfg_name, det_or_stoch, r_tol, a_tol, nodes, N, N_trials, ve, U_Acc_min_nd, int_save, 
                            True if phasing == 'free' else False, det_col_avoid, stat_col_avoid, 
-                           alpha_UT, beta_UT, kappa_UT, eps, np.sqrt(chi2.ppf(1-eps,3)))
+                           alpha_UT, beta_UT, kappa_UT, mx_tcm_bound, mx_dV_bound)
 
     # Dynamic arguments (arrays and such)
     dyn_args = {'t_node_bound': t_node_bound,
@@ -256,7 +266,12 @@ def process_config(config, problem_type: str):
                 'gates': gates}
 
     return Sys, dynamics, Boundary_Conds, cfg_args, dyn_args, optOptions
-    
+
+
+# ------------------------------------
+# Propagation and Optimizer Functions
+# ------------------------------------
+
 def prepare_prop_funcs(eoms_gen, dynamics, propagator_gen, propagator_gen_fin, dyn_args, cfg_args):
     
     # EOM given time, states and arguments
@@ -294,6 +309,11 @@ def prepare_opt_funcs(Boundary_Conds, iterators, dyn_args, cfg_args):
 
     return vals, grad, sens
 
+
+# -------------------------------
+# Solution Processing and Saving
+# -------------------------------
+
 def prepare_sol(solution, Sys, Boundary_Conds, propagators, dyn_args, cfg_args):
     
     t_node_bound = dyn_args['t_node_bound']
@@ -318,14 +338,48 @@ def prepare_sol(solution, Sys, Boundary_Conds, propagators, dyn_args, cfg_args):
         inputs = {'t_node_bound': t_node_bound,
                   'det_X_node_hst': output['Det']['X_node_hst'],
                   'det_U_node_hst': output['Det']['U_node_hst'],
-                  'K_ks': output['Det']['K_ks']}
+                  'K_ks': output['Det']['K_ks'],
+                  'dV_mean': output['Det']['dV_mean']}
         
         rng_seed = 0
 
-        output['MC_Runs'] = sim_MC_trajs(inputs, rng_seed, dyn_args, cfg_args, propagators['propagator_e'], n_jobs = 8)
+        output['MC_Runs'] = sim_MC_trajs(inputs, rng_seed, Sys, dyn_args, cfg_args, propagators['propagator_e'])
+        output['MC_Runs']['MC_P_ks'], output['MC_Runs']['MC_dV_tcm_scale'] = process_MC_results(output)
 
     return output
     
+def MC_to_cov(errors):
+    N_trials = errors.shape[0]
+    N_fv = errors.shape[1]
+
+    cov = np.zeros((N_fv, N_fv))
+
+    for k in range(N_trials):
+        err_k = errors[k,:].reshape(-1,1)
+        cov += err_k @ err_k.T
+
+    cov = cov / N_trials
+    return cov
+
+def process_MC_results(output):
+    # Evaluate MC State Deviation Covariances
+    X_MC_errors = output['MC_Runs']['X_hsts'] - output['Det']['X_hst']  # (N_trials x N x 7)
+
+    length = X_MC_errors.shape[1]
+    MC_P_ks = np.zeros((length, 7, 7))
+    for k in range(length):
+        X_errors_k = X_MC_errors[:,k,:]
+        P_k = MC_to_cov(X_errors_k)
+        MC_P_ks[k,:,:] = P_k
+
+    # Evaluate scale of the dV_tcm chi2 distribution
+    dV_tcms = output['MC_Runs']['dV_tcms']
+    MC_dV_tcm_scale = chi2.fit(dV_tcms, fdf=3, floc=0)[2]
+
+    return MC_P_ks, MC_dV_tcm_scale
+
+    
+
 def save_sol(output, Sys, save_loc: str, dyn_args, cfg_args):
     with h5py.File(save_loc+"data.h5", "w") as f:
         f.create_dataset("Name", data=output['Name'])
@@ -340,9 +394,15 @@ def save_sol(output, Sys, save_loc: str, dyn_args, cfg_args):
         f.create_dataset("Det_t_node_hst", data=output['Det']['t_node_hst'])
         f.create_dataset("Det_U_hst", data=output['Det']['U_hst'])
         f.create_dataset("Det_U_hst_sph", data=output['Det']['U_hst_sph'])
-        f.create_dataset("Det_dV", data=output['Det']['dV'])
+        f.create_dataset("Det_dV_mean", data=output['Det']['dV_mean'])
 
         if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
+            f.create_dataset("Det_TCM_norm_dV_hst", data=output['Det']['TCM_norm_dV_hst'])
+            f.create_dataset("Det_TCM_norm_bound_hst", data=output['Det']['TCM_norm_bound_hst'])
+            f.create_dataset("Det_U_norm_dV_hst", data=output['Det']['U_norm_dV_hst'])
+            f.create_dataset("Det_U_norm_bound_hst", data=output['Det']['U_norm_bound_hst'])
+            f.create_dataset("Det_dV_stat", data=output['Det']['dV_stat'])
+            f.create_dataset("Det_dV_bound", data=output['Det']['dV_bound'])
             f.create_dataset("Det_A_ks", data=output['Det']['A_ks'])
             f.create_dataset("Det_B_ks", data=output['Det']['B_ks'])
             f.create_dataset("Det_K_ks", data=output['Det']['K_ks'])
@@ -352,6 +412,8 @@ def save_sol(output, Sys, save_loc: str, dyn_args, cfg_args):
             f.create_dataset("MC_t_hsts", data=output['MC_Runs']['t_hsts'])
             f.create_dataset("MC_U_hsts", data=output['MC_Runs']['U_hsts'])
             f.create_dataset("MC_U_hsts_sph", data=output['MC_Runs']['U_hsts_sph'])
+            f.create_dataset("MC_dVs", data=output['MC_Runs']['dVs'])
+
 
     savemat(save_loc+"Sys.mat",Sys)
     return

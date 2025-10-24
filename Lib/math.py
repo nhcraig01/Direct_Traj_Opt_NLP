@@ -40,6 +40,12 @@ def mat_lmax(A):
 
 mat_lmax_vmap = jax.vmap(mat_lmax, in_axes=(0))
 
+def cart2sph(r_vec):
+    r = jnp.linalg.norm(r_vec, axis=1)
+    th = jnp.arctan2(r_vec[:,1], r_vec[:,0])*180/jnp.pi
+    phi = jnp.arcsin(r_vec[:,2]/r)*180/jnp.pi
+
+    return jnp.array([r, th, phi]).T
 
 # ----------------
 # Numpy Functions
@@ -52,12 +58,6 @@ def sig2cov(r_1sig, v_1sig, m_1sig, Sys, m0):
 
     return np.diag(np.array([r_cov, r_cov, r_cov, v_cov, v_cov, v_cov, m_cov]))
 
-def cart2sph(r_vec):
-    r = np.linalg.norm(r_vec, axis=1)
-    th = np.arctan2(r_vec[:,1], r_vec[:,0])*180/np.pi
-    phi = np.arcsin(r_vec[:,2]/r)*180/np.pi
-
-    return np.array([r, th, phi]).T
 
 
 
