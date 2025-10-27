@@ -1,9 +1,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-import astropy
 from astropy.time import Time
-from astropy import units as u
 
 
 # ------------------

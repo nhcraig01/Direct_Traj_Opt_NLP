@@ -7,10 +7,10 @@ dynamics:
 integration:
   a_tol: 1.e-14
   r_tol: 1.e-14
-  int_save: 32
-  mc_div: 2
-segments: 41
-MC_trials: 1000
+traj_parameters:
+  control_arcs: 40
+  save_pts_detailed: 12
+  MC_trials: 1000
 boundary_conditions:
   t0: "2026-01-01T00:00:00"
   tf: "2026-02-01T00:00:00"
@@ -49,7 +49,8 @@ uncertainty:
     prop_mag: 1.e-3
     fixed_point: 1.e-3
     prop_point: 1.e-3
-  eps: .001
+  tcm_stat_bound: .999
+  dV_bound: .99
 constraints: 
   col_avoid:
     parameters:
@@ -64,10 +65,11 @@ constraints:
         beta: 2.0
         kappa: 4.0
 SNOPT:
+SNOPT:
   major_opt_tol: 1.e-5 # Pretty much always keep this at 1.e-5 (linesearch_tol is more important)
   major_feas_tol: 1.e-6
   minor_feas_tol: 1.e-6
   major_iter_limit: 5000
-  partial_price: 1  # 1 for deterministic, 10 for stochastic
-  linesearch_tol: .01 # .99 for deterministic, .05 for stochastic
-  function_prec: 1e-13
+  partial_price: 10  # 1 for deterministic, 10 for stochastic
+  linesearch_tol: .1 # .99 for deterministic, .05 for stochastic
+  function_prec: 1e-12

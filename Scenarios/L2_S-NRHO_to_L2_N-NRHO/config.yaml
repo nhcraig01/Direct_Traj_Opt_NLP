@@ -7,10 +7,10 @@ dynamics:
 integration:
   a_tol: 1.e-14
   r_tol: 1.e-14
-  int_save: 32
-  mc_div: 2
-segments: 41
-MC_trials: 1000
+traj_parameters:
+  control_arcs: 40
+  save_pts_detailed: 12
+  MC_trials: 1000
 boundary_conditions:
   t0: "2026-01-01T00:00:00"
   tf: "2026-01-11T00:00:00"
@@ -69,6 +69,6 @@ SNOPT:
   major_feas_tol: 1.e-6
   minor_feas_tol: 1.e-6
   major_iter_limit: 2000
-  partial_price: 1  # 1 for deterministic, 10 for stochastic
-  linesearch_tol: .99 # .99 for deterministic, .05 for stochastic
+  partial_price: 10  # 1 for deterministic, 10 for stochastic
+  linesearch_tol: .05 # .99 for deterministic, .05 for stochastic
   function_prec: 1e-12

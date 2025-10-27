@@ -5,12 +5,9 @@ import jax
 from jax import numpy as jnp
 import diffrax as dfx
 
-from Lib.math import calc_t_elapsed_nd, sig2cov, cart2sph
+from Lib.math import calc_t_elapsed_nd, sig2cov
 from Lib.dynamics import CR3BPDynamics, forward_propagation_iterate, backward_propagation_iterate, objective_and_constraints, forward_propagation_cov_iterate, sim_MC_trajs, sim_Det_traj
 
-import functools as ft
-
-import scipy as sp
 from scipy.stats import chi2
 
 from dataclasses import dataclass, replace
@@ -89,25 +86,23 @@ def process_config(config, problem_type: str):
     det_or_stoch = problem_type
 
     # Integration
-    int_save = config['integration']['int_save']
     a_tol = config['integration']['a_tol']
     r_tol = config['integration']['r_tol']
 
-    # Segments
-    N = config['segments']
-    nodes = N-1
-
-    # MC Trials
-    N_trials = config['MC_trials']
+    # Trajectory Parameters
+    N_arcs = config['traj_parameters']['control_arcs']
+    N_nodes = N_arcs + 1
+    N_trials = config['traj_parameters']['MC_trials']
+    N_save = config['traj_parameters']['save_pts_detailed']
 
     # Forward and backward indices
-    indx_f = jnp.array(np.arange(0, nodes//2))
-    indx_b = jnp.array(np.flip(np.arange(nodes//2,nodes)))
+    indx_f = jnp.array(np.arange(0, N_arcs//2))
+    indx_b = jnp.array(np.flip(np.arange(N_arcs//2,N_arcs)))
 
     # Process Boundary Conditions
     t0 = config['boundary_conditions']['t0']
     tf = config['boundary_conditions']['tf']
-    t_node_bound = calc_t_elapsed_nd(t0, tf, N, Sys['Ts'])
+    t_node_bound = calc_t_elapsed_nd(t0, tf, N_nodes, Sys['Ts'])
     phasing = config['boundary_conditions']['type']
 
     Family0 = load_family(config['boundary_conditions']['initial_orbit']['family_path'])
@@ -186,10 +181,7 @@ def process_config(config, problem_type: str):
     # Covariance Terms
     init_cov = sig2cov(r_1sig, v_1sig, m_1sig, Sys, m0)
     targ_cov = sig2cov(r_1sig_t, v_1sig_t, m_1sig_t, Sys, m0)
-    U_dyn_err = (a_err/Sys['As'])/U_Acc_min_nd # Normalize against the minimum acceleration # This should be good
-    U_dyn_err = U_dyn_err/np.sqrt((t_node_bound[1]-t_node_bound[0])/32) # Scale by sqrt of time step (Wiener process)
-
-    # Pick up here, you were in the process of investigating scaling Jerry's brownian motion to your gauss zoh model
+    U_dyn_err = (a_err/Sys['As'])/U_Acc_min_nd # Normalize against the minimum acceleration used in EOMs
 
     G_stoch = np.diag(np.array([U_dyn_err, U_dyn_err, U_dyn_err])) # stochastic model error
     gates = np.array([fixed_mag, prop_mag, fixed_point, prop_point])
@@ -234,12 +226,12 @@ def process_config(config, problem_type: str):
         det_or_stoch: str
         r_tol: float
         a_tol: float
-        nodes: int
-        N: int
+        N_nodes: int
+        N_arcs: int
         N_trials: int
+        N_save: int
         ve: float
-        T_max_nd: float
-        int_save: int
+        U_Acc_min_nd: float
         free_phasing: bool
         det_col_avoid: bool 
         stat_col_avoid: bool
@@ -248,9 +240,9 @@ def process_config(config, problem_type: str):
         kappa_UT: float
         mx_tcm_bound: float
         mx_dV_bound: float
-    cfg_args = args_static(cfg_name, det_or_stoch, r_tol, a_tol, nodes, N, N_trials, ve, U_Acc_min_nd, int_save, 
-                           True if phasing == 'free' else False, det_col_avoid, stat_col_avoid, 
-                           alpha_UT, beta_UT, kappa_UT, mx_tcm_bound, mx_dV_bound)
+    cfg_args = args_static(cfg_name, det_or_stoch, r_tol, a_tol, N_nodes, N_arcs, N_trials, N_save, ve, U_Acc_min_nd,
+                           True if phasing == 'free' else False, det_col_avoid, stat_col_avoid, alpha_UT, beta_UT, 
+                           kappa_UT, mx_tcm_bound, mx_dV_bound)
 
     # Dynamic arguments (arrays and such)
     dyn_args = {'t_node_bound': t_node_bound,
@@ -272,7 +264,7 @@ def process_config(config, problem_type: str):
 # Propagation and Optimizer Functions
 # ------------------------------------
 
-def prepare_prop_funcs(eoms_gen, dynamics, propagator_gen, propagator_gen_fin, dyn_args, cfg_args):
+def prepare_prop_funcs(eoms_gen, dynamics, propagator_gen, dyn_args, cfg_args):
     
     # EOM given time, states and arguments
     eom_e = lambda t, states, args: eoms_gen(t, states, args, dynamics, cfg_args)
@@ -283,7 +275,7 @@ def prepare_prop_funcs(eoms_gen, dynamics, propagator_gen, propagator_gen_fin, d
     iterators = {}
     # Forward ode iteration given index and input_dict
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
-        propagator_e_fin = lambda X0, U, t0, t1, cfg_args: propagator_gen_fin(X0, U, t0, t1, eom_e, cfg_args)
+        propagator_e_fin = lambda X0, U, t0, t1, cfg_args: propagator_gen(X0, U, t0, t1, eom_e, replace(cfg_args, N_save=1))
         propagator_dX0_e = jax.jacfwd(propagator_e_fin, argnums=0)
         propagator_dU_e = jax.jacfwd(propagator_e_fin, argnums=1)
 
@@ -331,20 +323,21 @@ def prepare_sol(solution, Sys, Boundary_Conds, propagators, dyn_args, cfg_args):
     output['Orbf']['X_hst'] = Boundary_Conds['Orbf']['X_hst']
     output['Orbf']['t_hst'] = Boundary_Conds['Orbf']['t_hst']
 
+    print("Evaluating Detailed Deterministic Trajectory...")
     output['Det'] = sim_Det_traj(solution, Sys, propagators, dyn_args, cfg_args)
 
     # Run Monte Carlo Simulations
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
         inputs = {'t_node_bound': t_node_bound,
                   'det_X_node_hst': output['Det']['X_node_hst'],
-                  'det_U_node_hst': output['Det']['U_node_hst'],
-                  'K_ks': output['Det']['K_ks'],
+                  'det_U_arc_hst': output['Det']['U_arc_hst'],
+                  'K_arc_hst': output['Det']['K_arc_hst'],
                   'dV_mean': output['Det']['dV_mean']}
         
         rng_seed = 0
-
+        print("Running Detailed Monte Carlo Simulations...")
         output['MC_Runs'] = sim_MC_trajs(inputs, rng_seed, Sys, dyn_args, cfg_args, propagators['propagator_e'])
-        output['MC_Runs']['MC_P_ks'], output['MC_Runs']['MC_dV_tcm_scale'] = process_MC_results(output)
+        # output['MC_Runs']['MC_P_ks'], output['MC_Runs']['MC_dV_tcm_scale'] = process_MC_results(output)
 
     return output
     
@@ -378,8 +371,6 @@ def process_MC_results(output):
 
     return MC_P_ks, MC_dV_tcm_scale
 
-    
-
 def save_sol(output, Sys, save_loc: str, dyn_args, cfg_args):
     with h5py.File(save_loc+"data.h5", "w") as f:
         f.create_dataset("Name", data=output['Name'])
@@ -389,11 +380,12 @@ def save_sol(output, Sys, save_loc: str, dyn_args, cfg_args):
         f.create_dataset("Orbf_X_hst", data=output['Orbf']['X_hst'])
         f.create_dataset("Orbf_t_hst", data=output['Orbf']['t_hst'])
         f.create_dataset("Det_X_hst", data=output['Det']['X_hst'])
-        f.create_dataset("Det_t_hst", data=output['Det']['t_hst'])
         f.create_dataset("Det_X_node_hst", data=output['Det']['X_node_hst'])
-        f.create_dataset("Det_t_node_hst", data=output['Det']['t_node_hst'])
         f.create_dataset("Det_U_hst", data=output['Det']['U_hst'])
         f.create_dataset("Det_U_hst_sph", data=output['Det']['U_hst_sph'])
+        f.create_dataset("Det_U_arc_hst", data=output['Det']['U_arc_hst'])
+        f.create_dataset("Det_t_hst", data=output['Det']['t_hst'])
+        f.create_dataset("Det_t_node_hst", data=output['Det']['t_node_hst'])
         f.create_dataset("Det_dV_mean", data=output['Det']['dV_mean'])
 
         if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
@@ -403,10 +395,10 @@ def save_sol(output, Sys, save_loc: str, dyn_args, cfg_args):
             f.create_dataset("Det_U_norm_bound_hst", data=output['Det']['U_norm_bound_hst'])
             f.create_dataset("Det_dV_stat", data=output['Det']['dV_stat'])
             f.create_dataset("Det_dV_bound", data=output['Det']['dV_bound'])
-            f.create_dataset("Det_A_ks", data=output['Det']['A_ks'])
-            f.create_dataset("Det_B_ks", data=output['Det']['B_ks'])
-            f.create_dataset("Det_K_ks", data=output['Det']['K_ks'])
-            f.create_dataset("Det_P_ks", data=output['Det']['P_ks'])
+            f.create_dataset("Det_A_hst", data=output['Det']['A_hst'])
+            f.create_dataset("Det_B_hst", data=output['Det']['B_hst'])
+            f.create_dataset("Det_K_hst", data=output['Det']['K_hst'])
+            f.create_dataset("Det_P_hst", data=output['Det']['P_hst'])
             f.create_dataset("Det_P_Xf_targ", data=dyn_args['targ_cov'])
             f.create_dataset("MC_X_hsts", data=output['MC_Runs']['X_hsts'])
             f.create_dataset("MC_t_hsts", data=output['MC_Runs']['t_hsts'])
