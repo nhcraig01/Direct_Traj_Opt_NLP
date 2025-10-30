@@ -31,9 +31,14 @@ if __name__ == "__main__":
     # Problem Types:
     #   deterministic
     #   stochastic_gauss_zoh
+    # 
+    # Feedback Controller Types:
+    #   true_state
+    #   estimated_state
     # ---------------------------------------------------------------------------
-    folder_name = "L1_N-HO_to_L2_N-HO"
+    folder_name = "L2_S-NRHO_to_L2_N-NRHO"
     Problem_Type = "stochastic_gauss_zoh"
+    Feedback_Control_Type = "true_state"
 
     hot_start = True
     hot_start_sol = "deterministic"
@@ -47,10 +52,10 @@ if __name__ == "__main__":
 
     # Process Configuration - System Constants, optimization arguments, boundary conditions, dynamical eoms, and optimization type
     config = yaml_load(config_file)
-    Sys, dynamics, Boundary_Conds, cfg_args, dyn_args, optOptions = process_config(config, Problem_Type)
+    Sys, state_cov_dynamics, Boundary_Conds, cfg_args, dyn_args, optOptions = process_config(config, Problem_Type, Feedback_Control_Type)
 
     # Propagation functions
-    eom_e, propagators, iterators = prepare_prop_funcs(eoms_gen, dynamics, propagator_gen, dyn_args, replace(cfg_args, N_save=2))
+    eom_e, propagators, iterators = prepare_prop_funcs(eoms_gen, state_cov_dynamics, propagator_gen, dyn_args, replace(cfg_args, N_save=2))
 
     # Optimization functions
     vals, grad, sens = prepare_opt_funcs(Boundary_Conds, iterators, dyn_args, replace(cfg_args, N_save=2))
@@ -104,8 +109,10 @@ if __name__ == "__main__":
     optprop.addConGroup('c_X0', 7, lower = 0, upper = 0, jac = grad_proc_sparse['c_X0'])
     optprop.addConGroup('c_Xf', 6, lower = 0, upper = 0, jac = grad_proc_sparse['c_Xf'])
     optprop.addConGroup('c_X_mp', 7, lower = 0, upper = 0, jac = grad_proc_sparse['c_X_mp'])
-    if cfg_args.det_col_avoid:
+    if cfg_args.det_col_avoid and not cfg_args.stat_col_avoid:
         optprop.addConGroup('c_det_col_avoid', cfg_args.N_nodes, upper = 0, jac = grad_proc_sparse['c_det_col_avoid'])
+    if cfg_args.stat_col_avoid and Problem_Type != 'deterministic':
+        optprop.addConGroup('c_stat_col_avoid', cfg_args.N_nodes, upper = 0, jac = grad_proc_sparse['c_stat_col_avoid'])
     
     print('SNOPT Starting')
     start_time = time.time()

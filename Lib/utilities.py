@@ -6,9 +6,9 @@ from jax import numpy as jnp
 import diffrax as dfx
 
 from Lib.math import calc_t_elapsed_nd, sig2cov
-from Lib.dynamics import CR3BPDynamics, forward_propagation_iterate, backward_propagation_iterate, objective_and_constraints, forward_propagation_cov_iterate, sim_MC_trajs, sim_Det_traj
+from Lib.dynamics import CR3BPDynamics,TrueStateFeedback_CovPropagators, forward_propagation_iterate, backward_propagation_iterate, objective_and_constraints, forward_propagation_cov_iterate, sim_MC_trajs, sim_Det_traj
 
-from scipy.stats import chi2
+from scipy import stats
 
 from dataclasses import dataclass, replace
 
@@ -70,7 +70,7 @@ def process_sparsity(grad_nonsparse):
     
     return grad_sparse
 
-def process_config(config, problem_type: str):
+def process_config(config, det_or_stoch: str, feedback_control_type: str):
     """ This function processes the configuration file and returns the optimization arguments and boundary conditions
     """
     # Name
@@ -79,11 +79,6 @@ def process_config(config, problem_type: str):
     # High Level Dyanamical Constants
     g0 = 9.81/1000 # standard gravitational acceleration [km/s^3]
     Sys = yaml_load(config['dynamics']['sys_param_file'])
-
-    # Hot starter (to do later) **********
-
-    # Optimization type
-    det_or_stoch = problem_type
 
     # Integration
     a_tol = config['integration']['a_tol']
@@ -175,9 +170,9 @@ def process_config(config, problem_type: str):
     
     tcm_stat_bound = config['uncertainty']['tcm_stat_bound']
     dV_bound = config['uncertainty']['dV_bound']
-    mx_tcm_bound = np.sqrt(chi2.ppf(tcm_stat_bound,3))
-    mx_dV_bound = np.sqrt(chi2.ppf(dV_bound,3))
-    
+    mx_tcm_bound = np.sqrt(stats.chi2.ppf(tcm_stat_bound,3))
+    mx_dV_bound = np.sqrt(stats.chi2.ppf(dV_bound,3))
+
     # Covariance Terms
     init_cov = sig2cov(r_1sig, v_1sig, m_1sig, Sys, m0)
     targ_cov = sig2cov(r_1sig_t, v_1sig_t, m_1sig_t, Sys, m0)
@@ -194,6 +189,8 @@ def process_config(config, problem_type: str):
     stat_col_avoid = config['constraints']['col_avoid']['stat']['bool']
 
     # Stat chance constrained col avoidance terms
+    stat_col_bound = config['constraints']['col_avoid']['stat']['bound']
+    mx_col_bound = np.sqrt(stats.norm.ppf(stat_col_bound))
     alpha_UT = config['constraints']['col_avoid']['stat']['UT']['alpha']
     beta_UT = config['constraints']['col_avoid']['stat']['UT']['beta']
     kappa_UT = config['constraints']['col_avoid']['stat']['UT']['kappa']
@@ -208,7 +205,7 @@ def process_config(config, problem_type: str):
                   'Function precision': config['SNOPT']['function_prec'],
                   'Verify level': -1,
                   'Nonderivative linesearch': 0,
-                  'Elastic weight': 1.0e5}
+                  'Elastic weight': config['SNOPT']['elastic_weight']}
 
     # Choose Dynamics
     if config['dynamics']['type'] == 'CR3BP':
@@ -219,11 +216,19 @@ def process_config(config, problem_type: str):
                  'Aprop_eval': Aprop_eval, 
                  'Bprop_eval': Bprop_eval}
     
+    state_cov_dynamics = {'dynamics': dynamics}
+
+    if feedback_control_type.lower() == 'true_state':
+        cov_propagators = TrueStateFeedback_CovPropagators()
+    
+    state_cov_dynamics['cov_propagators'] = cov_propagators
+
     # Static configuration arguments
     @dataclass()
     class args_static:
         cfg_name: str
         det_or_stoch: str
+        feedback_control_type: str
         r_tol: float
         a_tol: float
         N_nodes: int
@@ -240,9 +245,10 @@ def process_config(config, problem_type: str):
         kappa_UT: float
         mx_tcm_bound: float
         mx_dV_bound: float
-    cfg_args = args_static(cfg_name, det_or_stoch, r_tol, a_tol, N_nodes, N_arcs, N_trials, N_save, ve, U_Acc_min_nd,
+        mx_col_bound: float
+    cfg_args = args_static(cfg_name, det_or_stoch, feedback_control_type, r_tol, a_tol, N_nodes, N_arcs, N_trials, N_save, ve, U_Acc_min_nd,
                            True if phasing == 'free' else False, det_col_avoid, stat_col_avoid, alpha_UT, beta_UT, 
-                           kappa_UT, mx_tcm_bound, mx_dV_bound)
+                           kappa_UT, mx_tcm_bound, mx_dV_bound, mx_col_bound)
 
     # Dynamic arguments (arrays and such)
     dyn_args = {'t_node_bound': t_node_bound,
@@ -257,16 +263,17 @@ def process_config(config, problem_type: str):
                 'G_stoch': G_stoch,
                 'gates': gates}
 
-    return Sys, dynamics, Boundary_Conds, cfg_args, dyn_args, optOptions
+    return Sys, state_cov_dynamics, Boundary_Conds, cfg_args, dyn_args, optOptions
 
 
 # ------------------------------------
 # Propagation and Optimizer Functions
 # ------------------------------------
 
-def prepare_prop_funcs(eoms_gen, dynamics, propagator_gen, dyn_args, cfg_args):
+def prepare_prop_funcs(eoms_gen, state_cov_dynamics, propagator_gen, dyn_args, cfg_args):
     
     # EOM given time, states and arguments
+    dynamics = state_cov_dynamics['dynamics']
     eom_e = lambda t, states, args: eoms_gen(t, states, args, dynamics, cfg_args)
 
     # Propagator given intial condition and arguments over span
@@ -282,11 +289,13 @@ def prepare_prop_funcs(eoms_gen, dynamics, propagator_gen, dyn_args, cfg_args):
         propagators['propagator_dX0_e'] = propagator_dX0_e
         propagators['propagator_dU_e'] = propagator_dU_e
 
-        cov_propagation_iterate_e = lambda i, input_dict: forward_propagation_cov_iterate(i, input_dict, dyn_args, cfg_args)
+        cov_propagators = state_cov_dynamics['cov_propagators']
+        propagators['cov_propagators'] = cov_propagators
+        cov_propagation_iterate_e = lambda k, input_dict: forward_propagation_cov_iterate(k, input_dict, cov_propagators, dyn_args, cfg_args)
         iterators['cov_propagation_iterate_e'] = cov_propagation_iterate_e
 
-    forward_propagation_iterate_e = lambda i, input_dict: forward_propagation_iterate(i, input_dict, propagators, dyn_args, cfg_args)
-    backward_propagation_iterate_e = lambda i, input_dict: backward_propagation_iterate(i, input_dict, propagators, dyn_args, cfg_args)
+    forward_propagation_iterate_e = lambda k, input_dict: forward_propagation_iterate(k, input_dict, propagators, dyn_args, cfg_args)
+    backward_propagation_iterate_e = lambda k, input_dict: backward_propagation_iterate(k, input_dict, propagators, dyn_args, cfg_args)
 
     iterators['forward_propagation_iterate_e'] = forward_propagation_iterate_e
     iterators['backward_propagation_iterate_e'] = backward_propagation_iterate_e
@@ -367,7 +376,7 @@ def process_MC_results(output):
 
     # Evaluate scale of the dV_tcm chi2 distribution
     dV_tcms = output['MC_Runs']['dV_tcms']
-    MC_dV_tcm_scale = chi2.fit(dV_tcms, fdf=3, floc=0)[2]
+    MC_dV_tcm_scale = stats.chi2.fit(dV_tcms, fdf=3, floc=0)[2]
 
     return MC_P_ks, MC_dV_tcm_scale
 

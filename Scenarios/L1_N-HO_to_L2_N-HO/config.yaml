@@ -60,6 +60,7 @@ constraints:
       bool: true
     stat:
       bool: false
+      bound: .999
       UT:
         alpha: 1.0
         beta: 2.0
@@ -71,5 +72,6 @@ SNOPT:
   minor_feas_tol: 1.e-6
   major_iter_limit: 5000
   partial_price: 10  # 1 for deterministic, 10 for stochastic
-  linesearch_tol: .1 # .99 for deterministic, .05 for stochastic
-  function_prec: 1e-12
+  linesearch_tol: .001 # .99 for deterministic, .001 for stochastic
+  elastic_weight: 1.e6
+  function_prec: 1e-13

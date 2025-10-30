@@ -1,18 +1,17 @@
 import jax
 import jax.numpy as jnp
-from scipy.stats import chi2
 import numpy as np
 import diffrax as dfx
 import sympy as sp
 
-from Lib.math import col_avoid_vmap, mat_lmax_vmap, mat_lmax, cart2sph
+from Lib.math import col_avoid_vmap, mat_lmax_vmap, mat_lmax, cart2sph, stat_col_avoid_vmap
 
 from tqdm import tqdm
 
 
-# ------------------
-# Dynamical Systems
-# ------------------
+# --------------------------------------------
+# Dynamical Models and Covariance Propagators
+# --------------------------------------------
 
 def CR3BPDynamics(U_Acc_min_nd, ve, mu, safe_d):
     r_x, r_y, r_z, v_x, v_y, v_z = sp.symbols('r_x, r_y, r_z, v_x, v_y, v_z', real=True)
@@ -85,8 +84,38 @@ def CR3BPDynamics(U_Acc_min_nd, ve, mu, safe_d):
 
     return eom_eval, Aprop_eval, Bprop_eval
 
+def TrueStateFeedback_CovPropagators():
+
+    def perArc_propagator(A_k, B_k, K_k, P_k, G_exe, G_stoch):
+        
+        # Propagate covariance
+        mod_A = A_k + B_k @ K_k
+
+        P_k1 = mod_A @ P_k @ mod_A.T + B_k @ (G_exe + G_stoch) @ B_k.T
+        return P_k1
+
+    def innerArc_propagator(A_i, B_i, P_i, tau_i, gam_i, P0_arc, K_arc, G_exe_arc, G_stoch_arc):
+        tau_gam_term = A_i @ (tau_i @ K_arc.T + gam_i) @ B_i.T
+
+        P_i1 = A_i@P_i@A_i.T + B_i@(G_exe_arc + G_stoch_arc + K_arc@P0_arc@K_arc.T)@B_i.T + tau_gam_term + tau_gam_term.T
+        tau_i1 = A_i @ tau_i + B_i @ K_arc @ P0_arc
+        gam_i1 = A_i @ gam_i + B_i @ (G_exe_arc + G_stoch_arc)
+
+        return P_i1, tau_i1, gam_i1
+
+    cov_propagators = {'perArc': perArc_propagator,
+                       'innerArc': innerArc_propagator}
+
+    return cov_propagators
+
+def EstimatedStateFeedback_CovPropagators():
+    # Pickup here. I think we've finished the general EKF time and measurement update functions.
+    # Next we need to make the covariance propagators that follow the EKF dynamics for inside the optimizer.
+    return None
+
+
 # ------------------
-# Control Functions
+# Controller Functions
 # ------------------
 
 def gates2Gexe(U, gates):
@@ -133,6 +162,114 @@ def xi2K(xi_k, A_k, B_k):
 
     return jnp.hstack([K_k, jnp.zeros((3,1))])
 
+# --------------------
+# Estimator Functions
+# --------------------
+
+def EKF_time(vals_k, dyn_vals, noise_terms):
+    # Unpack the current estimate and error values
+    Xhat_k = vals_k['Xhat_k']
+    Xtild_k = vals_k['Xtild_k']
+    Phat_k = vals_k['Phat_k']
+    Ptild_k = vals_k['Ptild_k']
+
+    # Unpack the dynamical values
+    A_k = dyn_vals['A_k']
+    B_k = dyn_vals['B_k']
+    K_k = dyn_vals['K_k']
+
+    # Unpack noise terms
+    G_exe = noise_terms['G_exe']
+    G_stoch = noise_terms['G_stoch']
+
+    Astar_k = A_k + B_k @ K_k
+
+    # Propagate the mean values
+    Xhat_k1 = Astar_k @ Xhat_k
+    Xtild_k1 = A_k @ Xtild_k
+
+    # Propagate the covariance values
+    Phat_k1 = Astar_k @ Phat_k @ Astar_k.T
+    Ptild_k1 = A_k @ Ptild_k @ A_k.T + B_k @ (G_exe + G_stoch) @ B_k.T
+    P_k1 = Phat_k1 + Ptild_k1
+
+    priori_vals_k1 = {'Xhat_k1': Xhat_k1,
+                      'Xtild_k1': Xtild_k1,
+                      'Phat_k1': Phat_k1,
+                      'Ptild_k1': Ptild_k1,
+                      'P_k1': P_k1}
+
+    return priori_vals_k1
+
+def EKF_measurement(priori_vals_k, meas_terms):
+    # Unpack the apriori estimate and error values
+    Xhat_k = priori_vals_k['Xhat_k']
+    Xtild_k = priori_vals_k['Xtild_k']
+    Phat_k = priori_vals_k['Phat_k']
+    Ptild_k = priori_vals_k['Ptild_k']
+
+    # Unpack the measurement values
+    y_k = meas_terms['y_k']
+    ybar_k = meas_terms['ybar_k']
+    H_k = meas_terms['H_k']
+    P_v = meas_terms['P_v']
+
+    # Compute the Kalman Gain
+    C_k = Ptild_k @ H_k.T
+    W_k = H_k @ Ptild_k @ H_k.T + P_v
+    L_k = jax.scipy.linalg.solv(W_k.T, C_k.T).T  # L_k = C_k @ jnp.linalg.inv(W_k)
+
+    # Update the mean values
+    update_term = L_k(y_k - (ybar_k + H_k @ Xhat_k))
+    Xhat_k_p = Xhat_k + update_term
+    Xtild_k_p = Xtild_k + update_term
+
+    # Update the covariance values
+    update_term = (jnp.eye(7) - L_k @ H_k)
+    Phat_k_p = Phat_k + L_k @ W_k @ L_k.T
+    Ptild_k_p = update_term @ Ptild_k @ update_term.T + L_k @ P_v @ L_k.T
+
+    P_k_p = Phat_k_p + Ptild_k_p
+
+    posteriori_vals_k = {'Xhat_k_p': Xhat_k_p,
+                         'Xtild_k_p': Xtild_k_p,
+                         'Phat_k_p': Phat_k_p,
+                         'Ptild_k_p': Ptild_k_p,
+                         'P_k_p': P_k_p}
+
+    return posteriori_vals_k
+
+
+# -------------------
+# Measurement Models
+# -------------------
+
+def range_measurement_model(r_obs):
+    # State to be estimated
+    r_x, r_y, r_z, v_x, v_y, v_z, m = sp.symbols('r_x, r_y, r_z, v_x, v_y, v_z, m', real=True)
+    X = sp.Matrix([[r_x],
+                    [r_y],
+                    [r_z],
+                    [v_x],
+                    [v_y],
+                    [v_z],
+                    [m]])
+
+    # Observer position
+    obs_x, obs_y, obs_z = sp.symbols('obs_x, obs_y, obs_z', real=True)
+    r_obs = sp.Matrix([[obs_x],
+                        [obs_y],
+                        [obs_z]])
+
+    range = sp.sqrt((r_x - obs_x)**2 + (r_y - obs_y)**2 + (r_z - obs_z)**2)
+    range_jac = range.jacobian(X)
+
+    h_eval = sp.lambdify((X, r_obs), range, 'jax')
+    H_eval = sp.lambdify((X, r_obs), range_jac, 'jax')
+
+    return h_eval, H_eval
+
+
 # --------------------------------
 # Numerical Propagation Functions
 # --------------------------------
@@ -147,7 +284,7 @@ def eoms_gen(t, states, args, dynamics, cfg_args):
         
         return Xdot
     
-def propagator_gen(X0, U, t0, t1, EOM, cfg_args, G_stoch=None):
+def propagator_gen(X0, U, t0, t1, EOM, cfg_args):
     """ This function creates a general integrator using diffrax
     """
 
@@ -174,7 +311,7 @@ def propagator_gen(X0, U, t0, t1, EOM, cfg_args, G_stoch=None):
                             stepsize_controller=stepsize_controller, 
                             adjoint=dfx.DirectAdjoint(),
                             saveat=save_t,
-                            max_steps=16**4)
+                            max_steps=16**5)
 
     return sol if N_save > 1 else sol.ys[-1].flatten()
 
@@ -188,15 +325,15 @@ def propagator_cov(A_k, B_k, K_k, P_k, G_exe, G_stoch):
 # Iterative Propagation Functions
 # --------------------------------
 
-def forward_propagation_iterate(i, input_dict, propagators, dyn_args, cfg_args):
+def forward_propagation_iterate(k, input_dict, propagators, dyn_args, cfg_args):
     X0_true_f = input_dict['X0_true_f']
     states = input_dict['states']
     controls = input_dict['controls']   
 
     t_node_bound = dyn_args['t_node_bound']
 
-    sol_f = propagators['propagator_e'](X0_true_f, controls[i,:], t_node_bound[i], t_node_bound[i+1], cfg_args)
-    states = states.at[i,:,:].set(sol_f.ys[:,:7])
+    sol_f = propagators['propagator_e'](X0_true_f, controls[k,:], t_node_bound[k], t_node_bound[k+1], cfg_args)
+    states = states.at[k,:,:].set(sol_f.ys[:,:7])
  
     
     output_dict = {'states': states, 'controls': controls}
@@ -204,12 +341,12 @@ def forward_propagation_iterate(i, input_dict, propagators, dyn_args, cfg_args):
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
         A_ks = input_dict['A_ks']
         B_ks = input_dict['B_ks']
-    
-        tmp_A = propagators['propagator_dX0_e'](X0_true_f, controls[i,:], t_node_bound[i], t_node_bound[i+1], cfg_args)
-        tmp_B = propagators['propagator_dU_e'](X0_true_f, controls[i,:], t_node_bound[i], t_node_bound[i+1], cfg_args)
 
-        A_ks = A_ks.at[i,:,:].set(tmp_A)
-        B_ks = B_ks.at[i,:,:].set(tmp_B)
+        tmp_A = propagators['propagator_dX0_e'](X0_true_f, controls[k,:], t_node_bound[k], t_node_bound[k+1], cfg_args)
+        tmp_B = propagators['propagator_dU_e'](X0_true_f, controls[k,:], t_node_bound[k], t_node_bound[k+1], cfg_args)
+
+        A_ks = A_ks.at[k,:,:].set(tmp_A)
+        B_ks = B_ks.at[k,:,:].set(tmp_B)
 
         output_dict['A_ks'] = A_ks
         output_dict['B_ks'] = B_ks
@@ -219,7 +356,7 @@ def forward_propagation_iterate(i, input_dict, propagators, dyn_args, cfg_args):
 
     return output_dict
 
-def backward_propagation_iterate(ii,input_dict, propagators, dyn_args, cfg_args):
+def backward_propagation_iterate(kk,input_dict, propagators, dyn_args, cfg_args):
     X0_true_b = input_dict['X0_true_b']
     states = input_dict['states']
     controls = input_dict['controls']
@@ -227,10 +364,10 @@ def backward_propagation_iterate(ii,input_dict, propagators, dyn_args, cfg_args)
     t_node_bound = dyn_args['t_node_bound']
 
     indx_b = dyn_args['indx_b']
-    i = indx_b[ii]
+    k = indx_b[kk]
 
-    sol_b = propagators['propagator_e'](X0_true_b, controls[i,:], t_node_bound[i+1], t_node_bound[i], cfg_args)
-    states = states.at[i,:,:].set(jnp.flipud(sol_b.ys))
+    sol_b = propagators['propagator_e'](X0_true_b, controls[k,:], t_node_bound[k+1], t_node_bound[k], cfg_args)
+    states = states.at[k,:,:].set(jnp.flipud(sol_b.ys))
 
 
     output_dict = {'states': states, 'controls': controls}
@@ -239,14 +376,14 @@ def backward_propagation_iterate(ii,input_dict, propagators, dyn_args, cfg_args)
         A_ks = input_dict['A_ks']
         B_ks = input_dict['B_ks']
 
-        tmp_A = propagators['propagator_dX0_e'](X0_true_b, controls[i,:], t_node_bound[i+1], t_node_bound[i], cfg_args)
-        tmp_B = propagators['propagator_dU_e'](X0_true_b, controls[i,:], t_node_bound[i+1], t_node_bound[i], cfg_args)
+        tmp_A = propagators['propagator_dX0_e'](X0_true_b, controls[k,:], t_node_bound[k+1], t_node_bound[k], cfg_args)
+        tmp_B = propagators['propagator_dU_e'](X0_true_b, controls[k,:], t_node_bound[k+1], t_node_bound[k], cfg_args)
 
         tmp_A = jnp.linalg.inv(tmp_A)
         tmp_B = -tmp_A @ tmp_B
 
-        A_ks = A_ks.at[i,:,:].set(tmp_A)
-        B_ks = B_ks.at[i,:,:].set(tmp_B)
+        A_ks = A_ks.at[k,:,:].set(tmp_A)
+        B_ks = B_ks.at[k,:,:].set(tmp_B)
 
         output_dict['A_ks'] = A_ks
         output_dict['B_ks'] = B_ks
@@ -256,7 +393,7 @@ def backward_propagation_iterate(ii,input_dict, propagators, dyn_args, cfg_args)
 
     return output_dict
 
-def forward_propagation_cov_iterate(i, input_dict, dyn_args, cfg_args):
+def forward_propagation_cov_iterate(k, input_dict, cov_propagators, dyn_args, cfg_args):
     # Unpack inputs
     controls = input_dict['controls']
     xis = input_dict['xis']  
@@ -266,29 +403,29 @@ def forward_propagation_cov_iterate(i, input_dict, dyn_args, cfg_args):
     P_ks = input_dict['P_ks']
     P_Us = input_dict['P_Us']
     
-    A_k = A_ks[i,:,:]
-    B_k = B_ks[i,:,:]
-    xi_k = xis[i,:]
+    A_k = A_ks[k,:,:]
+    B_k = B_ks[k,:,:]
+    xi_k = xis[k,:]
     
     # Gates execution error covariance
     gates = dyn_args['gates']
-    G_exe = gates2Gexe(controls[i,:], gates)
+    G_exe = gates2Gexe(controls[k,:], gates)
 
     # Stochastic Gauss ZOH acceleration covariance
     G_stoch = dyn_args['G_stoch']
 
     # Compute colsed loop gain
     K_k = xi2K(xi_k, A_k, B_k)
-    K_ks = K_ks.at[i,:,:].set(K_k)
+    K_ks = K_ks.at[k,:,:].set(K_k)
 
     # Propagate covariance
-    P_ki = P_ks[i,:,:]
-    P_ki1 = propagator_cov(A_k, B_k, K_k, P_ki, G_exe, G_stoch)
-    P_ks = P_ks.at[i+1,:,:].set(P_ki1)
+    P_k = P_ks[k,:,:]
+    P_k1 = cov_propagators['perArc'](A_k, B_k, K_k, P_k, G_exe, G_stoch)
+    P_ks = P_ks.at[k+1,:,:].set(P_k1)
 
     # Compute control covariance
-    P_Ui = K_k @ P_ki @ K_k.T
-    P_Us = P_Us.at[i,:,:].set(P_Ui)
+    P_Ui = K_k @ P_k @ K_k.T
+    P_Us = P_Us.at[k,:,:].set(P_Ui)
 
     output_dict = {'controls': controls, 'xis': xis, 'A_ks': A_ks, 'B_ks': B_ks, 'K_ks': K_ks, 'P_ks': P_ks, 'P_Us': P_Us} 
     return output_dict
@@ -374,55 +511,59 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, dyn_args, cfg_a
 
     if cfg_args.det_or_stoch.lower() == 'deterministic':
         output_dict['o_mf'] = J_det # obejective - minimizing sum of control norms
-        output_dict['c_Us'] = control_norms # constraint - control norm
+        output_dict['c_Us'] = control_norms.flatten() # constraint - control norm
     elif cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
         control_max_eig = cfg_args.mx_tcm_bound * jnp.sqrt(mat_lmax_vmap(P_Us))
 
         J_stat = jnp.sum(control_max_eig)
         output_dict['o_mf'] = J_det + J_stat # obejective - minimizing sum of control norms and max eigenvalues of control covariances
-        output_dict['c_Us'] = control_norms + control_max_eig # constraint - stochastic control norm
+        output_dict['c_Us'] = control_norms.flatten() + control_max_eig.flatten() # constraint - stochastic control norm
 
         P_Xf = dyn_args['targ_cov_inv_sqrt']@P_ks[-1,:,:]@dyn_args['targ_cov_inv_sqrt'].T - jnp.eye(7)
         output_dict['c_P_Xf'] = jnp.log10(mat_lmax(P_Xf)+1) # constraint - final state covariance
 
     if cfg_args.free_phasing:
-        output_dict['c_X0'] = X0[:7] - jnp.hstack([X_start.evaluate(alpha).flatten(), 1.]) # constraint - X0
-        output_dict['c_Xf'] = Xf[:6] - X_end.evaluate(beta).flatten() # constraint - Xf
+        output_dict['c_X0'] = (X0[:7] - jnp.hstack([X_start.evaluate(alpha).flatten(), 1.])).flatten() # constraint - X0
+        output_dict['c_Xf'] = (Xf[:6] - X_end.evaluate(beta).flatten()).flatten() # constraint - Xf
     else: 
-        output_dict['c_X0'] = X0[:7] - jnp.hstack([X_start, 1.]) # constraint - X0
-        output_dict['c_Xf'] = Xf[:6] - X_end.flatten() # constraint - Xf
+        output_dict['c_X0'] = (X0[:7] - jnp.hstack([X_start, 1.])).flatten() # constraint - X0
+        output_dict['c_Xf'] = (Xf[:6] - X_end.flatten()).flatten() # constraint - Xf
 
-    output_dict['c_X_mp'] = states[indx_f[-1], -1, :7] - states[indx_b[-1], 0, :7] # constraint - state match point    
+    output_dict['c_X_mp'] = (states[indx_f[-1], -1, :7] - states[indx_b[-1], 0, :7]).flatten() # constraint - state match point
     
     node_states = jnp.zeros((N_nodes, 7))
     node_states = node_states.at[0, :].set(states[0, 0, :7])
     node_states = node_states.at[1:, :].set(states[:, -1, :7])
-    if cfg_args.det_col_avoid:
-        r_obs = dyn_args['r_obs']
-        d_safe = dyn_args['d_safe'] 
-        col_vals = col_avoid_vmap(node_states, r_obs, d_safe)
-        output_dict['c_det_col_avoid'] = col_vals # constraint - deterministic collision avoidance
-        
+    if cfg_args.det_col_avoid and not cfg_args.stat_col_avoid:
+        col_vals = col_avoid_vmap(node_states, dyn_args)
+        output_dict['c_det_col_avoid'] = col_vals.flatten() # constraint - deterministic collision avoidance
+        col_print = jnp.max(output_dict['c_det_col_avoid'])
+    if cfg_args.stat_col_avoid and cfg_args.det_or_stoch.lower() != 'deterministic':
+        Y_mean, P_y = stat_col_avoid_vmap(node_states, P_ks, dyn_args, cfg_args)
+        stat_col_vals = Y_mean + cfg_args.mx_col_bound * jnp.sqrt(P_y + eps)
+        output_dict['c_stat_col_avoid'] = stat_col_vals.flatten() # constraint - statistical collision avoidance
+        col_print = jnp.max(output_dict['c_stat_col_avoid'])
+
     # still need to add stochastic col avoidance
     
     if cfg_args.det_or_stoch.lower() == 'deterministic':
-        base_str = "J: {:.2e},    X0: {:.2e},    Xf: {:.2e},    X_mp: {:.2e},    Col: {:.2e}"
+        base_str = "J: {:.3e},    X0: {:.1e},    Xf: {:.0e},    X_mp: {:.0e},    Col: {:.0e}"
 
-        jax.debug.print(base_str, output_dict['o_mf'].astype(float), 
-                        jnp.max(jnp.abs(output_dict['c_X0'])).astype(float), 
-                        jnp.max(jnp.abs(output_dict['c_Xf'])).astype(float), 
-                        jnp.max(jnp.abs(output_dict['c_X_mp'])).astype(float), 
-                        jnp.max(output_dict['c_det_col_avoid']).astype(float))
+        jax.debug.print(base_str, output_dict['o_mf'], 
+                        jnp.max(jnp.abs(output_dict['c_X0'])), 
+                        jnp.max(jnp.abs(output_dict['c_Xf'])), 
+                        jnp.max(jnp.abs(output_dict['c_X_mp'])), 
+                        col_print)
     elif cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
-        base_str = "J_det: {:.2e}, J_stat: {:.2e}, X0: {:.2e}, Xf: {:.2e}, X_mp: {:.2e}, P_Xf: {:.2e}, ccol: {:.2e}, max_xi: {:.2e}"
+        base_str = "J_det: {:.3e}, J_stat: {:.3e}, X0: {:.0e}, Xf: {:.0e}, X_mp: {:.0e}, P_Xf: {:.0e}, Col: {:.0e}, max_xi: {:.1e}"
 
-        jax.debug.print(base_str, J_det.astype(float), J_stat.astype(float),
-                        jnp.max(jnp.abs(output_dict['c_X0'])).astype(float), 
-                        jnp.max(jnp.abs(output_dict['c_Xf'])).astype(float), 
-                        jnp.max(jnp.abs(output_dict['c_X_mp'])).astype(float), 
-                        jnp.max(output_dict['c_P_Xf']).astype(float),
-                        jnp.max(output_dict['c_det_col_avoid']).astype(float),
-                        jnp.max(xis).astype(float))
+        jax.debug.print(base_str, J_det, J_stat,
+                        jnp.max(jnp.abs(output_dict['c_X0'])),
+                        jnp.max(jnp.abs(output_dict['c_Xf'])),
+                        jnp.max(jnp.abs(output_dict['c_X_mp'])),
+                        jnp.max(output_dict['c_P_Xf']),
+                        col_print,
+                        jnp.max(xis))
 
     return output_dict
 
@@ -437,6 +578,14 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
     U_arc_hst = sol.xStar['controls'].reshape(cfg_args.N_arcs, 3)
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
         xi_arc_hst = sol.xStar['xis'].reshape(cfg_args.N_arcs, 2)
+
+    # Unpack propagators
+    propagator_e = propagators['propagator_e']
+    if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
+        propagator_dX0_e = propagators['propagator_dX0_e']
+        propagator_dU_e = propagators['propagator_dU_e']
+
+        propagator_cov_innerArc = propagators['cov_propagators']['innerArc']
 
     # Initialize outputs
     arc_length = cfg_args.N_save - 1
@@ -475,8 +624,8 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
         U_arc = U_arc_hst[k,:]
         if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
             xi_arc = xi_arc_hst[k,:]
-            A_arc = propagators['propagator_dX0_e'](X0_arc, U_arc, t_node_bound[k], t_node_bound[k+1], cfg_args)
-            B_arc = propagators['propagator_dU_e'](X0_arc, U_arc, t_node_bound[k], t_node_bound[k+1], cfg_args)
+            A_arc = propagator_dX0_e(X0_arc, U_arc, t_node_bound[k], t_node_bound[k+1], cfg_args)
+            B_arc = propagator_dU_e(X0_arc, U_arc, t_node_bound[k], t_node_bound[k+1], cfg_args)
             K_arc = xi2K(xi_arc, A_arc, B_arc)
             K_arc_hst = K_arc_hst.at[k,:,:].set(K_arc)
             G_exe_arc = gates2Gexe(U_arc, dyn_args['gates'])
@@ -486,7 +635,7 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
             P_u_arc = K_arc @ P0_arc @ K_arc.T
 
         # Propagate the state across arc
-        sol_f_arc = propagators['propagator_e'](X0_arc, U_arc, t_node_bound[k], t_node_bound[k+1], cfg_args)
+        sol_f_arc = propagator_e(X0_arc, U_arc, t_node_bound[k], t_node_bound[k+1], cfg_args)
         X_hst_arc = sol_f_arc.ys
         t_hst_arc = sol_f_arc.ts
         X_hst = X_hst.at[arc_i_0+1:arc_i_f+1,:].set(X_hst_arc[1:,:])
@@ -519,18 +668,14 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
 
                 X_i = X_hst_arc[i,:]
                 P_i = P_hst[arc_i_0+i,:,:]
-                A_i = propagators['propagator_dX0_e'](X_i, U_arc, t_hst_arc[i], t_hst_arc[i+1], cfg_args)
-                B_i = propagators['propagator_dU_e'](X_i, U_arc, t_hst_arc[i], t_hst_arc[i+1], cfg_args)
+                A_i = propagator_dX0_e(X_i, U_arc, t_hst_arc[i], t_hst_arc[i+1], cfg_args)
+                B_i = propagator_dU_e(X_i, U_arc, t_hst_arc[i], t_hst_arc[i+1], cfg_args)
 
                 A_hst = A_hst.at[arc_i_0+i,:,:].set(A_i)
                 B_hst = B_hst.at[arc_i_0+i,:,:].set(B_i)
 
                 # You need to propagate additional terms for the assumption of ZOH closed loop feedback and stochastic noise
-                tau_gam_term = A_i @ (tau @ K_arc.T + gam) @ B_i.T
-
-                P_i1 = A_i@P_i@A_i.T + B_i@(G_exe_arc + G_stoch_arc + K_arc@P0_arc@K_arc.T)@B_i.T + tau_gam_term + tau_gam_term.T
-                tau = A_i @ tau + B_i @ K_arc @ P0_arc
-                gam = A_i @ gam + B_i @ (G_exe_arc + G_stoch_arc)
+                P_i1, tau, gam = propagator_cov_innerArc(A_i, B_i, P_i, tau, gam, P0_arc, K_arc, G_exe_arc, G_stoch_arc)
 
                 P_hst = P_hst.at[arc_i_0+i+1,:,:].set(P_i1)
 
