@@ -36,67 +36,79 @@ if __name__ == "__main__":
     #   true_state
     #   estimated_state
     # ---------------------------------------------------------------------------
-    folder_name = "L2_S-NRHO_to_L2_N-NRHO"
+    folder_name = "Sandbox"
     Problem_Type = "stochastic_gauss_zoh"
     Feedback_Control_Type = "true_state"
 
     hot_start = True
-    hot_start_sol = "deterministic"
+    hot_start_sol = "stochastic_gauss_zoh_true_state"
     # ---------------------------------------------------------------------------
+    file_name = Problem_Type
+    if Problem_Type.lower() == 'stochastic_gauss_zoh': 
+        file_name += "_" + Feedback_Control_Type
     config_file = r"Scenarios/"+folder_name+"/config.yaml"
     hot_start_file = r"Scenarios/"+folder_name+"/"+hot_start_sol+"_sol.h5"
-    save_file = r"Plotting/Scenarios/"+folder_name+"/"+Problem_Type+"/"
-    OptimSol_save_file = r"Scenarios/"+folder_name+"/"+Problem_Type+"_sol.h5"
+    save_file = r"Plotting/Scenarios/"+folder_name+"/"+file_name+"/"
+    OptimSol_save_file = r"Scenarios/"+folder_name+"/"+file_name+"_sol.h5"
     # ---------------------------------------------------------------------------
+
+    # SNOPT Options -------------------------------------------------------------
+    optOptions = {'Major optimiality tolerance': 1e-5,  # Pretty much always keep this at 1.e-5 (linesearch_tol is more important)
+                  'Major feasibility tolerance': 1e-6,  
+                  'Minor feasibility tolerance': 1e-5,
+                  'Major iterations limit': 0, 
+                  'Partial prince': 10,                 # 1 for deterministic, 10 for stochastic
+                  'Linesearch tolerance': .01,           # .5 for deterministic, .01 for stochastic
+                  'Function precision': 1e-11,
+                  'Verify level': -1,
+                  'Nonderivative linesearch': 0,
+                  'Elastic weight': 1.e6}
+    # ---------------------------------------------------------------------------
+
+    # Ok pick up here in the mornging. Something fishy going on with the dynamically informed final
+    # covariance constraint. Go back and look at the derivation and implementation.
+    # Also look if you can reduce the compile time for the MC simulations.
+
 
 
     # Process Configuration - System Constants, optimization arguments, boundary conditions, dynamical eoms, and optimization type
     config = yaml_load(config_file)
-    Sys, state_cov_dynamics, Boundary_Conds, cfg_args, dyn_args, optOptions = process_config(config, Problem_Type, Feedback_Control_Type)
+    Sys, models, Boundary_Conds, cfg_args, dyn_args = process_config(config, Problem_Type, Feedback_Control_Type)
 
     # Propagation functions
-    eom_e, propagators, iterators = prepare_prop_funcs(eoms_gen, state_cov_dynamics, propagator_gen, dyn_args, replace(cfg_args, N_save=2))
+    eom_e, propagators, iterators = prepare_prop_funcs(eoms_gen, models, propagator_gen, dyn_args, replace(cfg_args, N_save=2))
 
     # Optimization functions
-    vals, grad, sens = prepare_opt_funcs(Boundary_Conds, iterators, dyn_args, replace(cfg_args, N_save=2))
+    vals, grad, sens = prepare_opt_funcs(Boundary_Conds, iterators, propagators, dyn_args, replace(cfg_args, N_save=2))
 
-    # Create Sparse Jacobians
-    print("Calculating SNOPT Gradient Sparsity")
-    sparse_inputs = {'X0': 1*jnp.ones(7),
-                     'Xf': 2*jnp.ones(7),
-                    'controls': .01*jnp.ones(3*cfg_args.N_arcs)}
-    if cfg_args.free_phasing:
-        sparse_inputs['alpha'] = 0.1
-        sparse_inputs['beta'] = 0.1
-    if Problem_Type == 'stochastic_gauss_zoh':
-        sparse_inputs['xis'] = 0.01*jnp.ones(2*cfg_args.N_arcs)
-    grad_nonsparse = grad(sparse_inputs)
-    grad_proc_sparse = process_sparsity(grad_nonsparse)
-
-
-    # Load Hot Starter Solution
+    # Set up initial guess and hot starter
     print("Setting Up Initial Guess")
-    init_guess = {'controls': 0.01*jnp.ones(3*cfg_args.N_arcs), 
+    init_guess = {'U_arc_hst': 1e-2*jnp.ones(3*cfg_args.N_arcs), 
                   'X0': jnp.hstack([Boundary_Conds['X0_init'],1]), 
                   'Xf': jnp.hstack([Boundary_Conds['Xf_init'],0.95])}
     if cfg_args.free_phasing:
         init_guess['alpha'] = Boundary_Conds['alpha_min']
         init_guess['beta'] = Boundary_Conds['beta_min']
     if Problem_Type == 'stochastic_gauss_zoh':
-        init_guess['xis'] = 1e-2*jnp.ones(2*cfg_args.N_arcs)
+        init_guess['xi_arc_hst'] = 1e-1*jnp.ones(2*cfg_args.N_arcs)
     if hot_start:
         sol_hot = load_OptimizerSol(hot_start_file)
         for key in sol_hot.keys():
             init_guess[key] = sol_hot[key] 
+
+    # Process Sparsity for SNOPT
+    print("Processing SNOPT Gradient Sparsity")
+    grad_nonsparse = grad(init_guess)
+    grad_proc_sparse = process_sparsity(grad_nonsparse)
     
 
     # Optimal Control Problem
     optprop = Optimization("Forward Backward Direct Trajectory Optimization", vals)
-    optprop.addVarGroup('controls', 3*cfg_args.N_arcs, "c", value = init_guess['controls'], lower = -1, upper = 1)
+    optprop.addVarGroup('U_arc_hst', 3*cfg_args.N_arcs, "c", value = init_guess['U_arc_hst'], lower = -1, upper = 1)
     optprop.addVarGroup('X0', 7, "c", value = init_guess['X0'], lower=[-10, -10, -10, -10, -10, -10, 1e-1], upper=[10, 10, 10, 10, 10, 10, 1])
     optprop.addVarGroup('Xf', 7, "c", value = init_guess['Xf'], lower=[-10, -10, -10, -10, -10, -10, 1e-1], upper=[10, 10, 10, 10, 10, 10, 1])
     if Problem_Type == 'stochastic_gauss_zoh':
-        optprop.addVarGroup('xis', 2*cfg_args.N_arcs, "c", value = init_guess['xis'], lower = 1e-5)
+        optprop.addVarGroup('xi_arc_hst', 2*cfg_args.N_arcs, "c", value = init_guess['xi_arc_hst'], lower = 1e-5)
     if cfg_args.free_phasing:
         optprop.addVarGroup('alpha', 1, "c", value = init_guess['alpha'], lower = Boundary_Conds['alpha_min'], upper = Boundary_Conds['alpha_max'])
         optprop.addVarGroup('beta', 1, "c", value = init_guess['beta'], lower = Boundary_Conds['beta_min'], upper = Boundary_Conds['beta_max'])

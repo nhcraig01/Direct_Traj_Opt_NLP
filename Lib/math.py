@@ -22,10 +22,10 @@ def calc_t_elapsed_nd(t0, tf, nodes, t_star):
 # --------------
 
 def col_avoid(X, dyn_args):
-    r_obs = dyn_args['r_obs']
+    r_obj = dyn_args['r_obj']
     safe_d = dyn_args['d_safe']
 
-    delta_X = X[:3]-r_obs
+    delta_X = X[:3]-r_obj
     dist = jnp.sqrt(delta_X[0]**2 + delta_X[1]**2 + delta_X[2]**2)
     
     return safe_d - dist
@@ -33,8 +33,6 @@ def col_avoid(X, dyn_args):
 col_avoid_vmap = jax.vmap(col_avoid, in_axes=(0, None))
 
 def stat_col_avoid(X_mean, P_x, dyn_args, cfg_args):
-    r_obs = dyn_args['r_obs']
-    safe_d = dyn_args['d_safe']
     nx = X_mean.shape[0]
 
     lam = cfg_args.alpha_UT**2 * (nx + cfg_args.kappa_UT) - nx
@@ -77,11 +75,17 @@ def mat_lmax(A):
 mat_lmax_vmap = jax.vmap(mat_lmax, in_axes=(0))
 
 def cart2sph(r_vec):
-    r = jnp.linalg.norm(r_vec, axis=1)
-    th = jnp.arctan2(r_vec[:,1], r_vec[:,0])*180/jnp.pi
-    phi = jnp.arcsin(r_vec[:,2]/r)*180/jnp.pi
+    x, y, z = r_vec[0], r_vec[1], r_vec[2]
+    r = jnp.linalg.norm(r_vec)
+    th = jnp.arctan2(y, x)*180/jnp.pi
+    rho_xy = jnp.hypot(x, y)
+    phi_raw = jnp.arctan2(z, rho_xy)*180/jnp.pi
 
-    return jnp.array([r, th, phi]).T
+    phi = jnp.where(r>0, phi_raw, 0.0)
+
+    return jnp.array([r, th, phi])
+
+cart2sph_vmap = jax.vmap(cart2sph, in_axes=(0))
 
 # ----------------
 # Numpy Functions

@@ -1,5 +1,5 @@
 ---
-name: "Sandbox Test Case - L4 N-Axial to L5 N-Axial - Deterministic"
+name: "L1 N-Halo to L2 S-Halo"
 description: "IDK whaever... this is just random testing, go see the other scenarios for real stuff"
 dynamics:
   type: "CR3BP"
@@ -7,66 +7,72 @@ dynamics:
 integration:
   a_tol: 1.e-12
   r_tol: 1.e-12
-  int_save: 2
-  mc_div: 2
-segments: 41
+traj_parameters:
+  control_arcs: 100
+  sub_arcs: 1
+  save_pts_detailed: 12
+  MC_trials: 1000
 boundary_conditions:
   t0: "2026-01-01T00:00:00"
   tf: "2026-01-21T00:00:00"
+  tf_T: 12
   initial_orbit:
-    family_path: '../CR3BP_dev/EarthMoon_System/L4_N_Axial.h5'
-    Orb_ID: 350
+    family_path: '../CR3BP_dev/EarthMoon_System/L1_N_Halo.h5'
+    Orb_ID: 200
     Start_Idx: 0
   final_orbit:
-    family_path: '../CR3BP_dev/EarthMoon_System/L5_N_Axial.h5'
-    Orb_ID: 200
+    family_path: '../CR3BP_dev/EarthMoon_System/L2_S_Halo.h5'
+    Orb_ID: 310
     Start_Idx: 0
   type: "free"
   alpha:
-    min: 0.0
-    max: 1.0
+    min: .0
+    max: .5
   beta:
-    min: 0.0
-    max: 1.0
+    min: .0
+    max: .5
 engine:
   m0: 200
   Isp: 3337
   T_max: .5
 uncertainty:
   covariance:
-    initial:
+    initial_dispersion:
       pos_sig: 1
-      vel_sig: .01
+      vel_sig: .001
       mass_sig: 1.e-12
-    target:
-      pos_sig: 10
+    initial_error:
+      pos_sig: 0.
+      vel_sig: 0.
+      mass_sig: 0.
+    post_insert_target_total:
+      pos_sig: 20
       vel_sig: .02
       mass_sig: 60
   acc_sig: 5.e-12
+  measurement:
+    type: 'range'
+    observer_body: 'r1'
+    observer_alt_lat_lon: [6371., 0., 0.]
+    range_sig: 1.e-3
   gates:
     fixed_mag: 1.e-3
     prop_mag: 1.e-3
     fixed_point: 1.e-3
     prop_point: 1.e-3
-  eps: .001
+  tcm_stat_bound: .999
+  dV_bound: .99
 constraints: 
   col_avoid:
     parameters:
-      r_obs: [384967.8803361727, 0., 0.]
-      safe_d: 1737.5
+      obj_body: 'r2'
+      safe_d: 2000
     det:
       bool: true
     stat:
-      bool: false
+      bool: true
+      bound: .999
       UT:
         alpha: 1.0
         beta: 2.0
         kappa: 4.0
-SNOPT:
-  major_opt_tol: 1.e-4
-  major_feas_tol: 1.e-6
-  minor_feas_tol: 1.e-6
-  major_iter_limit: 10000
-  partial_price: 1
-  linesearch_tol: .99
-  function_prec: 1e-11
