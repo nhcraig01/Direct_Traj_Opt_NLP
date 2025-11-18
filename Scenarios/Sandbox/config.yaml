@@ -8,14 +8,14 @@ integration:
   a_tol: 1.e-12
   r_tol: 1.e-12
 traj_parameters:
-  control_arcs: 100
+  control_arcs: 50
   sub_arcs: 1
-  save_pts_detailed: 12
+  save_pts_detailed: 21
   MC_trials: 1000
 boundary_conditions:
   t0: "2026-01-01T00:00:00"
   tf: "2026-01-21T00:00:00"
-  tf_T: 12
+  tf_T: 5
   initial_orbit:
     family_path: '../CR3BP_dev/EarthMoon_System/L1_N_Halo.h5'
     Orb_ID: 200
@@ -38,7 +38,7 @@ engine:
 uncertainty:
   covariance:
     initial_dispersion:
-      pos_sig: 1
+      pos_sig: 10
       vel_sig: .001
       mass_sig: 1.e-12
     initial_error:
@@ -46,8 +46,8 @@ uncertainty:
       vel_sig: 0.
       mass_sig: 0.
     post_insert_target_total:
-      pos_sig: 20
-      vel_sig: .02
+      pos_sig: 150
+      vel_sig: .01
       mass_sig: 60
   acc_sig: 5.e-12
   measurement:
@@ -66,11 +66,11 @@ constraints:
   col_avoid:
     parameters:
       obj_body: 'r2'
-      safe_d: 2000
+      safe_d: 5000
     det:
-      bool: true
+      bool: False
     stat:
-      bool: true
+      bool: True
       bound: .999
       UT:
         alpha: 1.0

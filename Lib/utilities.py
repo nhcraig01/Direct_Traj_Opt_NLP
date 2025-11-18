@@ -92,6 +92,9 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str):
     N_nodes = N_arcs + 1
     N_trials = config['traj_parameters']['MC_trials']
     N_save = config['traj_parameters']['save_pts_detailed']
+    arc_length_opt = N_subarcs+1
+    arc_length_det = N_subarcs*(N_save-1)+1
+    transfer_length_det = N_arcs*(arc_length_det-1) + 1    
 
     # Forward and backward indices
     indx_f = jnp.array(np.arange(0, N_arcs//2))
@@ -100,9 +103,13 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str):
     # Process Boundary Conditions
     t0 = config['boundary_conditions']['t0']
     tf = config['boundary_conditions']['tf']
-    tf_T = config['boundary_conditions']['tf_T']*(3600/Sys['Ts'])
+    tf_T = config['boundary_conditions']['tf_T']*(24*3600/Sys['Ts'])
     t_node_bound = calc_t_elapsed_nd(t0, tf, N_nodes, Sys['Ts'])
     phasing = config['boundary_conditions']['type']
+    dt_detail = (t_node_bound[1] - t_node_bound[0])/(arc_length_det - 1)
+    post_insert_length = int(tf_T//dt_detail + 1)
+    
+    length = transfer_length_det + post_insert_length - 1
 
     Family0 = load_family(config['boundary_conditions']['initial_orbit']['family_path'])
     Familyf = load_family(config['boundary_conditions']['final_orbit']['family_path'])
@@ -250,6 +257,11 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str):
         N_subarcs: int
         N_trials: int
         N_save: int
+        arc_length_det: int
+        arc_length_opt: int
+        transfer_length_det: int
+        post_insert_length: int
+        length: int
         meas_dim: int
         ve: float
         U_Acc_min_nd: float
@@ -263,8 +275,9 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str):
         mx_dV_bound: float
         mx_col_bound: float
     cfg_args = args_static(cfg_name, det_or_stoch, feedback_control_type, r_tol, a_tol, N_nodes, N_arcs, N_subarcs, N_trials, 
-                           N_save, meas_dim, ve, U_Acc_min_nd, True if phasing == 'free' else False, det_col_avoid, 
-                           stat_col_avoid, alpha_UT, beta_UT, kappa_UT, mx_tcm_bound, mx_dV_bound, mx_col_bound)
+                           N_save, arc_length_det, arc_length_opt, transfer_length_det, post_insert_length, length, meas_dim, ve, U_Acc_min_nd, 
+                           True if phasing == 'free' else False, det_col_avoid, stat_col_avoid, alpha_UT, beta_UT, kappa_UT, 
+                           mx_tcm_bound, mx_dV_bound, mx_col_bound)
 
     # Dynamic arguments (arrays and such)
     dyn_args = {'t_node_bound': t_node_bound,
@@ -295,12 +308,12 @@ def prepare_prop_funcs(eoms_gen, models, propagator_gen, dyn_args, cfg_args):
     eom_e = lambda t, states, args: eoms_gen(t, states, args, dynamics, cfg_args)
 
     # Propagator given intial condition and arguments over span
-    propagator_e = lambda X0, U, t0, t1, cfg_args: propagator_gen(X0, U, t0, t1, eom_e, cfg_args)
+    propagator_e = lambda X0, U, t0, t1, prop_length, cfg_args: propagator_gen(X0, U, t0, t1, eom_e, prop_length, cfg_args)
     propagators = {'propagator_e': propagator_e}
     iterators = {}
     # Forward ode iteration given index and input_dict
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
-        propagator_e_fin = lambda X0, U, t0, t1, cfg_args: propagator_gen(X0, U, t0, t1, eom_e, replace(cfg_args, N_subarcs=0))
+        propagator_e_fin = lambda X0, U, t0, t1, cfg_args: propagator_gen(X0, U, t0, t1, eom_e, 0, cfg_args)
         propagator_dX0_e = jax.jacfwd(propagator_e_fin, argnums=0)
         propagator_dU_e = jax.jacfwd(propagator_e_fin, argnums=1)
         propagator_dX0_arc_vmap_e = jax.vmap(propagator_dX0_e, in_axes=(0, None, 0, 0, None))
@@ -348,11 +361,17 @@ def prepare_sol(solution, Sys, Boundary_Conds, propagators, dyn_args, cfg_args):
     output['Orbf'] = {}
     output['Det'] = {}
 
-    # Store departure and arrival orbits
-    output['Orb0']['X_hst'] = Boundary_Conds['Orb0']['X_hst']
-    output['Orb0']['t_hst'] = Boundary_Conds['Orb0']['t_hst']
-    output['Orbf']['X_hst'] = Boundary_Conds['Orbf']['X_hst']
-    output['Orbf']['t_hst'] = Boundary_Conds['Orbf']['t_hst']
+    # Create Departure and Arrival Orbit Histories (But Phased with Optimal Transfer)
+    orb0_T = Boundary_Conds['Orb0']['t_hst'][-1]
+    orb0_X0 = solution.xStar['X0']
+    ode_sol = propagators['propagator_e'](orb0_X0, jnp.zeros((3,)), 0, orb0_T, Boundary_Conds['Orb0']['t_hst'].shape[0], cfg_args)
+    output['Orb0']['X_hst'] = ode_sol.ys
+    output['Orb0']['t_hst'] = ode_sol.ts
+    orbf_T = Boundary_Conds['Orbf']['t_hst'][-1]
+    orbf_Xf = solution.xStar['Xf']
+    ode_sol = propagators['propagator_e'](orbf_Xf, jnp.zeros((3,)), 0, orbf_T, Boundary_Conds['Orbf']['t_hst'].shape[0], cfg_args)
+    output['Orbf']['X_hst'] = ode_sol.ys
+    output['Orbf']['t_hst'] = ode_sol.ts
 
     print("Evaluating Detailed Deterministic Trajectory...")
     output['Det'] = sim_Det_traj(solution, Sys, propagators, dyn_args, cfg_args)
@@ -437,6 +456,7 @@ def save_sol(output, Sys, save_loc: str, dyn_args, cfg_args):
             f.create_dataset("Det_P_hst", data=output['Det']['P_hst'])
             f.create_dataset("Det_P_Xf_targ", data=output['Det']['P_Xf_targ'])
             f.create_dataset("Det_P_XT_targ", data=output['Det']['P_XT_targ'])
+            f.create_dataset("Det_P_Targ_hst", data=output['Det']['P_Targ_hst'])
             f.create_dataset("MC_X_hsts", data=output['MC_Runs']['X_hsts'])
             f.create_dataset("MC_t_hsts", data=output['MC_Runs']['t_hsts'])
             f.create_dataset("MC_U_hsts", data=output['MC_Runs']['U_hsts'])

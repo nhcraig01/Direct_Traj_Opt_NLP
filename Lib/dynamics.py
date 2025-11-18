@@ -155,8 +155,6 @@ def TrueStateFeedback_CovPropagators():
     return cov_propagators
 
 def EstimatedStateFeedback_CovPropagators():
-    # Pickup here. I think we've finished the general EKF time and measurement update functions.
-    # Next we need to make the covariance propagators that follow the EKF dynamics for inside the optimizer.
     def perArc_propagator(vals_k, dyn_terms, ctrl_terms, meas_terms, meas_update: bool = True):
         # Unpack the current estimate and error values
         Phat_k = vals_k['Phat_k']
@@ -388,7 +386,7 @@ def eoms_gen(t, states, args, dynamics, cfg_args):
         
         return Xdot
     
-def propagator_gen(X0, U, t0, t1, EOM, cfg_args):
+def propagator_gen(X0, U, t0, t1, EOM, prop_length, cfg_args):
     """ This function creates a general integrator using diffrax
     """
 
@@ -400,8 +398,8 @@ def propagator_gen(X0, U, t0, t1, EOM, cfg_args):
     solver = dfx.Dopri8()
 
     stepsize_controller = dfx.PIDController(rtol=r_tol, atol=a_tol)
-    if N_subarcs >= 1:
-        save_t = dfx.SaveAt(ts=jnp.linspace(t0,t1,N_arc_tot))
+    if prop_length >= 1:
+        save_t = dfx.SaveAt(ts=jnp.linspace(t0,t1,prop_length))
     else:
         save_t = dfx.SaveAt(t1=True)
 
@@ -418,7 +416,7 @@ def propagator_gen(X0, U, t0, t1, EOM, cfg_args):
                             saveat=save_t,
                             max_steps=16**5)
 
-    return sol if N_subarcs >= 1 else sol.ys[-1].flatten()
+    return sol if prop_length >= 1 else sol.ys[-1].flatten()
 
 
 # --------------------------------
@@ -432,7 +430,7 @@ def forward_propagation_iterate(i, input_dict, propagators, models, dyn_args, cf
 
     t_node_bound = dyn_args['t_node_bound']
 
-    sol_f = propagators['propagator_e'](X0_true_f, U_arc_hst[i,:], t_node_bound[i], t_node_bound[i+1], cfg_args)
+    sol_f = propagators['propagator_e'](X0_true_f, U_arc_hst[i,:], t_node_bound[i], t_node_bound[i+1], cfg_args.arc_length_opt, cfg_args)
     X_arc_hst = sol_f.ys[:,:7]
     t_arc_hst = sol_f.ts
     X_hst = X_hst.at[i,:,:].set(X_arc_hst)
@@ -488,7 +486,7 @@ def backward_propagation_iterate(ii,input_dict, propagators, models, dyn_args, c
     indx_b = dyn_args['indx_b']
     i = indx_b[ii]
 
-    sol_b = propagators['propagator_e'](X0_true_b, U_arc_hst[i,:], t_node_bound[i+1], t_node_bound[i], cfg_args)
+    sol_b = propagators['propagator_e'](X0_true_b, U_arc_hst[i,:], t_node_bound[i+1], t_node_bound[i], cfg_args.arc_length_opt, cfg_args)
     X_arc_hst_b = sol_b.ys[:,:7]
     t_arc_hst_b = sol_b.ts
     X_arc_hst_f = jnp.flipud(X_arc_hst_b)
@@ -594,12 +592,6 @@ def forward_propagation_cov_iterate(i, input_dict, cov_propagators, dyn_args, cf
         # additional terms not yet accounted for
     
     cov_output_dict = jax.lax.fori_loop(0, cfg_args.N_subarcs, cov_propagators['subArc'], cov_input_dict)
-    #A_j = A_hst[i,0,:,:]
-    #B_j = B_hst[i,0,:,:]
-    #P_j = P_hst[i,0,:,:]
-    #modA_j = A_j + B_j @ K_arc_hst[i,:,:]
-    #P_j1 = modA_j @ P_j @ modA_j.T + B_j @ (G_exe_arc_hst[i,:,:] + dyn_args['G_stoch']) @ B_j.T
-    #P_hst = P_hst.at[i,1,:,:].set(P_j1)
 
     # Format high-level arc covariance outputs
     P_js = cov_output_dict['P_js']
@@ -768,7 +760,6 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, dy
         S_XT_inv = dyn_args['S_XT_targ_inv']
         S_Xf_inv = S_XT_inv @ Af
         S_Xf = jnp.linalg.inv(S_Xf_inv)
-        jax.debug.print("Final State Covariance Targ:\n{}", S_Xf@S_Xf.T)
         tmp_P_Xf_val = S_Xf_inv @ P_hst[-1,-1,:,:] @ S_Xf_inv.T - jnp.eye(7)
         output_dict['c_P_Xf'] = jnp.log10(mat_lmax(tmp_P_Xf_val)+1) # constraint - final state covariance
 
@@ -846,8 +837,8 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
         propagator_cov_subArc = propagators['cov_propagators']['subArc']
 
     # Initialize outputs
-    arc_length = cfg_args.N_subarcs * (cfg_args.N_save - 1) + 1  # number of steps per arc in saved history (including bounds)
-    length = (cfg_args.N_arcs+1)*(arc_length-1) + 1
+    arc_length = cfg_args.arc_length_det  # number of steps per arc in saved history (including bounds)
+    length = cfg_args.length  # total number of steps in saved history
     X_hst = jnp.zeros((length, 7))
     X_node_hst = jnp.zeros((cfg_args.N_nodes, 7))
     U_hst = jnp.zeros((length, 3))
@@ -863,6 +854,7 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
         B_hst = jnp.zeros((length-1, 7, 3))
         K_hst = jnp.zeros((length-1, 3, 7))
         P_hst = jnp.zeros((length, 7, 7))
+        P_Targ_hst = jnp.zeros((cfg_args.post_insert_length, 7, 7))
         P_u_hst = jnp.zeros((length-1, 3, 3))
     
     # Initialize first entries
@@ -895,7 +887,7 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
             # need to add terms here for navigational case
 
         # Propagate the state across arc
-        sol_f_arc = propagator_e(X0_arc, U_arc, t_node_bound[k], t_node_bound[k+1], cfg_args)
+        sol_f_arc = propagator_e(X0_arc, U_arc, t_node_bound[k], t_node_bound[k+1], cfg_args.arc_length_det, cfg_args)
         X_hst_arc = sol_f_arc.ys 
         t_hst_arc = sol_f_arc.ts
         X_hst = X_hst.at[arc_i_0:arc_i_f+1,:].set(X_hst_arc)
@@ -945,10 +937,10 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
             P_hst = P_hst.at[arc_i_0+1:arc_i_f+1,:,:].set(P_js[1:,:,:])
 
     # Post-insertion propagation
-    post_insert_i0 = cfg_args.N_arcs*(arc_length-1)
+    post_insert_i0 = cfg_args.transfer_length_det - 1
     X0_post_insert = X_hst[post_insert_i0,:]
     t0_post_insert = t_hst[post_insert_i0]
-    sol_post_insert = propagator_e(X0_post_insert, jnp.zeros((3,)),t0_post_insert, t0_post_insert+dyn_args['tf_T'], cfg_args)
+    sol_post_insert = propagator_e(X0_post_insert, jnp.zeros((3,)),t0_post_insert, t0_post_insert+dyn_args['tf_T'], cfg_args.post_insert_length, cfg_args)
     X_hst_post_insert = sol_post_insert.ys
     t_hst_post_insert = sol_post_insert.ts
     X_hst = X_hst.at[post_insert_i0+1:,:].set(X_hst_post_insert[1:,:])
@@ -960,6 +952,7 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
         A_hst = A_hst.at[post_insert_i0:,:].set(A_hst_post_insert)
         B_hst = B_hst.at[post_insert_i0:,:].set(B_hst_post_insert)
 
+        # Propagate the predicted covariance throught post-insertion arc
         cov_input_dict = {'A_js': A_hst[post_insert_i0:,:,:],
                         'B_js': B_hst[post_insert_i0:,:,:],
                         'K_arc': jnp.zeros((3,7)), 'G_stoch_arc': jnp.zeros((3,3)), 'G_exe_arc': jnp.zeros((3,3)),
@@ -970,7 +963,7 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
         elif cfg_args.feedback_type.lower() == 'estimated_state':
             # add in terms for navigational case later
             pass
-        cov_output_dict = jax.lax.fori_loop(0, arc_length, propagator_cov_subArc, cov_input_dict)
+        cov_output_dict = jax.lax.fori_loop(0, cfg_args.post_insert_length, propagator_cov_subArc, cov_input_dict)
         P_js_post_insert = cov_output_dict['P_js']
         P_hst = P_hst.at[post_insert_i0+1:,:].set(P_js_post_insert[1:,:,:])
 
@@ -979,6 +972,19 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
         Af = propagators['propagator_dX0_e'](Xf_det,jnp.zeros((3,)), t0_post_insert, t0_post_insert+dyn_args['tf_T'], cfg_args)
         Af_inv = jnp.linalg.inv(Af)
         P_Xf_targ = Af_inv @ P_XT_targ @ Af_inv.T
+
+        P_Targ_hst = P_Targ_hst.at[0,:,:].set(P_Xf_targ)
+
+        # Propagate the target covariance through post-insertion arc
+        cov_input_dict = {'A_js': A_hst[post_insert_i0:,:,:],
+                        'B_js': B_hst[post_insert_i0:,:,:],
+                        'K_arc': jnp.zeros((3,7)), 'G_stoch_arc': jnp.zeros((3,3)), 'G_exe_arc': jnp.zeros((3,3)),
+                        'P_js': P_Targ_hst}
+        if cfg_args.feedback_type.lower() == 'true_state':
+            cov_input_dict['tau_j'] = P_Xf_targ
+            cov_input_dict['gam_j'] = jnp.zeros((7,3))
+        cov_output_dict = jax.lax.fori_loop(0, cfg_args.post_insert_length, propagator_cov_subArc, cov_input_dict)
+        P_Targ_hst = cov_output_dict['P_js']
 
 
 
@@ -1020,6 +1026,7 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
         output_dict['P_u_hst'] = P_u_hst
         output_dict['P_Xf_targ'] = P_Xf_targ
         output_dict['P_XT_targ'] = P_XT_targ
+        output_dict['P_Targ_hst'] = P_Targ_hst
 
     return output_dict
 
@@ -1041,8 +1048,8 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagator):
     X0_trial = jax.random.multivariate_normal(key_X0, X0_det, P_k0)
 
     # Initialize outputs
-    arc_length = cfg_args.N_subarcs * (cfg_args.N_save - 1)+1  # number of steps per arc in saved history
-    length = (cfg_args.N_arcs+1)*(arc_length-1) + 1
+    arc_length = cfg_args.arc_length_det  # number of steps per arc in saved history
+    length = cfg_args.length  # total number of steps in saved history
     X_hst = jnp.zeros((length, 7))
     U_hst = jnp.zeros((length, 3))
     t_hst = jnp.zeros((length,))
@@ -1074,7 +1081,7 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagator):
         U_arc_tot = U_arc_cmd_nsy + U_arc_w
 
         # Propagate the state across arc
-        sol_f_arc = propagator(X0_arc, U_arc_tot, t_node_bound[k], t_node_bound[k+1], cfg_args)
+        sol_f_arc = propagator(X0_arc, U_arc_tot, t_node_bound[k], t_node_bound[k+1], cfg_args.arc_length_det, cfg_args)
         X_hst_arc = sol_f_arc.ys
         t_hst_arc = sol_f_arc.ts
 
@@ -1083,10 +1090,10 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagator):
         U_hst = U_hst.at[arc_i_0:arc_i_f,:].set(jnp.tile(U_arc_cmd, (arc_length-1,1)))
 
     # Post-insertion propagation
-    post_insert_i0 = cfg_args.N_arcs*(arc_length-1)
+    post_insert_i0 = cfg_args.transfer_length_det - 1
     X0_post_insert = X_hst[post_insert_i0,:]
     t0_post_insert = t_hst[post_insert_i0]
-    sol_post_insert = propagator(X0_post_insert, jnp.zeros((3,)),t0_post_insert, t0_post_insert+dyn_args['tf_T'], cfg_args)
+    sol_post_insert = propagator(X0_post_insert, jnp.zeros((3,)),t0_post_insert, t0_post_insert+dyn_args['tf_T'], cfg_args.post_insert_length, cfg_args)
     X_hst_post_insert = sol_post_insert.ys
     t_hst_post_insert = sol_post_insert.ts
     X_hst = X_hst.at[post_insert_i0+1:,:].set(X_hst_post_insert[1:,:])
@@ -1113,8 +1120,8 @@ def sim_MC_trajs(inputs, seed, Sys, dyn_args, cfg_args, propagator):
     # MC_Batched = jax.jit(jax.vmap(one_trial),backend='cpu')
     One_MC = jax.jit(one_trial,backend='cpu')
 
-    arc_length = cfg_args.N_subarcs * (cfg_args.N_save - 1)  # number of steps per arc in saved history
-    length = (cfg_args.N_arcs+1)*arc_length + 1
+    arc_length_det = cfg_args.arc_length_det  # number of steps per arc in saved history
+    length = cfg_args.length  # total number of steps in saved history
     X_hsts = jnp.zeros((N,length, 7))
     U_hsts = jnp.zeros((N,length, 3))
     U_hsts_sph = jnp.zeros((N,length, 3))
