@@ -5,12 +5,12 @@ dynamics:
   type: "CR3BP"
   sys_param_file: '../CR3BP_dev/EarthMoon_System/EMsys.yaml'
 integration:
-  a_tol: 1.e-12
-  r_tol: 1.e-12
+  a_tol: 1.e-13
+  r_tol: 1.e-13
 traj_parameters:
-  control_arcs: 50
+  control_arcs: 40
   sub_arcs: 1
-  save_pts_detailed: 21
+  save_pts_detailed: 41
   MC_trials: 1000
 boundary_conditions:
   t0: "2026-01-01T00:00:00"

@@ -759,7 +759,6 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, dy
                                              dyn_args['t_node_bound'][-1]+dyn_args['tf_T'], cfg_args)
         S_XT_inv = dyn_args['S_XT_targ_inv']
         S_Xf_inv = S_XT_inv @ Af
-        S_Xf = jnp.linalg.inv(S_Xf_inv)
         tmp_P_Xf_val = S_Xf_inv @ P_hst[-1,-1,:,:] @ S_Xf_inv.T - jnp.eye(7)
         output_dict['c_P_Xf'] = jnp.log10(mat_lmax(tmp_P_Xf_val)+1) # constraint - final state covariance
 

@@ -55,11 +55,11 @@ if __name__ == "__main__":
     # SNOPT Options -------------------------------------------------------------
     optOptions = {'Major optimality tolerance': 1e-5,  # Pretty much always keep this at 1.e-5 (linesearch_tol is more important)
                   'Major feasibility tolerance': 1e-6,  
-                  'Minor feasibility tolerance': 1e-6,
-                  'Major iterations limit': 5000, 
-                  'Partial prince': 1,                 # Maybe just keep at 1
-                  'Linesearch tolerance': .001,           # .5 for deterministic, .01 for stochastic
-                  'Function precision': 1e-11,
+                  'Minor feasibility tolerance': 1e-5,
+                  'Major iterations limit': 1000, 
+                  'Partial prince': 10,                 # Maybe just keep at 1
+                  'Linesearch tolerance': .1,           # .5 for deterministic, .01 for stochastic
+                  'Function precision': 1e-12,
                   'Verify level': -1,
                   'Nonderivative linesearch': 0,
                   'Elastic weight': 1.e6}
