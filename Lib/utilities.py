@@ -493,3 +493,179 @@ def load_OptimizerSol(input_loc: str) -> dict:
             sol["xi_arc_hst"] = f["xi_arc_hst"][:]
 
     return sol
+
+
+import copy
+from typing import Dict, Any, Tuple
+
+import numpy as np
+import jax
+import jax.numpy as jnp
+
+
+def _to_numpy_tree(tree):
+    """Convert a pytree of arrays to numpy arrays."""
+    return jax.tree_util.tree_map(lambda x: np.asarray(x), tree)
+
+
+def _to_jax_dict(d):
+    """Convert a dict of arrays to JAX arrays."""
+    return {k: jnp.asarray(v) for k, v in d.items()}
+
+
+def check_jacobian_fd_vs_ad(
+    func,
+    grad_func,
+    x0: Dict[str, Any],
+    h: float = 1e-6,
+    atol: float = 1e-6,
+    rtol: float = 1e-3,
+    verbose: bool = True,
+) -> Tuple[Dict[str, Dict[str, np.ndarray]],
+           Dict[str, Dict[str, np.ndarray]],
+           Dict[str, Dict[str, Any]]]:
+    """
+    Compare JAX autodiff Jacobian against central finite-difference Jacobian.
+
+    Parameters
+    ----------
+    func : callable
+        Function mapping `inputs_dict -> outputs_dict`.
+        Example: outputs = func(inputs)
+        outputs must be a dict: {out_key: array}.
+    grad_func : callable
+        Function mapping `inputs_dict -> jac_dict`, typically from jax.jacrev.
+        Must return nested dict: {out_key: {in_key: jac_array}}.
+    x0 : dict
+        Initial inputs dict. Keys are input names (e.g. 'X0', 'Xf', 'controls'),
+        values are numpy/JAX arrays.
+    h : float
+        Finite-difference step size (central difference).
+    atol : float
+        Absolute tolerance for considering AD vs FD “different”.
+    rtol : float
+        Relative tolerance for considering AD vs FD “different”.
+    verbose : bool
+        If True, print a summary of max errors.
+
+    Returns
+    -------
+    fd_jac : dict
+        Nested dict {out_key: {in_key: fd_jac_array}} with FD Jacobians.
+    ad_jac : dict
+        Nested dict {out_key: {in_key: ad_jac_array}} converted to numpy.
+    diff_report : dict
+        Nested dict {out_key: {in_key: {...}}} with:
+            - 'max_abs_err'
+            - 'max_rel_err'
+            - 'bad_indices': list of index tuples where error > tol.
+              Indices are in the combined shape: out_shape + in_shape.
+    """
+
+    # Make a numpy copy of the initial point so we can mutate it
+    x0_np = {k: np.array(v, dtype=float) for k, v in x0.items()}
+
+    # Evaluate function at x0 to get output structure
+    y0 = func(_to_jax_dict(x0_np))
+    y0_np = _to_numpy_tree(y0)
+
+    # Evaluate autodiff Jacobian and convert to numpy
+    ad_jac_raw = grad_func(_to_jax_dict(x0_np))
+    ad_jac = {}
+    for out_key, inner in ad_jac_raw.items():
+        ad_jac[out_key] = {}
+        for in_key, arr in inner.items():
+            ad_jac[out_key][in_key] = np.asarray(arr)
+
+    out_keys = list(y0_np.keys())
+    in_keys = list(x0_np.keys())
+
+    # Build FD Jacobian with same structure: J[out][in] has shape y[out].shape + x[in].shape
+    fd_jac: Dict[str, Dict[str, np.ndarray]] = {
+        out_key: {
+            in_key: np.zeros(y0_np[out_key].shape + x0_np[in_key].shape, dtype=float)
+            for in_key in in_keys
+        }
+        for out_key in out_keys
+    }
+
+    # Central difference loop over each input variable and each element of that variable
+    for in_key in in_keys:
+        x_base = x0_np[in_key]
+        x_shape = x_base.shape
+        if x_shape == ():  # scalar
+            index_iter = [()]
+        else:
+            index_iter = np.ndindex(*x_shape)
+
+        for idx in index_iter:
+            # Create perturbed copies of all inputs
+            x_plus = {k: v.copy() for k, v in x0_np.items()}
+            x_minus = {k: v.copy() for k, v in x0_np.items()}
+
+            x_plus[in_key][idx] += h
+            x_minus[in_key][idx] -= h
+
+            # Evaluate function at x+h and x-h
+            y_plus = _to_numpy_tree(func(_to_jax_dict(x_plus)))
+            y_minus = _to_numpy_tree(func(_to_jax_dict(x_minus)))
+
+            # FD derivative for each output wrt this single input element
+            for out_key in out_keys:
+                dy = (y_plus[out_key] - y_minus[out_key]) / (2.0 * h)  # shape = y_shape
+                # Place it into the correct slice of the Jacobian
+                fd_jac[out_key][in_key][(Ellipsis,) + idx] = dy
+
+    # Compare AD vs FD
+    diff_report: Dict[str, Dict[str, Any]] = {}
+    for out_key in out_keys:
+        diff_report[out_key] = {}
+        for in_key in in_keys:
+            fd_arr = fd_jac[out_key][in_key]
+            ad_arr = ad_jac[out_key].get(in_key, None)
+
+            if ad_arr is None:
+                # grad_func didn't return this block; skip
+                diff_report[out_key][in_key] = {
+                    "present_in_ad": False,
+                    "present_in_fd": True,
+                    "note": "AD jacobian missing this block.",
+                }
+                continue
+
+            if fd_arr.shape != ad_arr.shape:
+                diff_report[out_key][in_key] = {
+                    "present_in_ad": True,
+                    "present_in_fd": True,
+                    "shape_mismatch": (fd_arr.shape, ad_arr.shape),
+                }
+                continue
+
+            abs_err = np.abs(ad_arr - fd_arr)
+            denom = np.maximum(np.abs(ad_arr), np.abs(fd_arr))
+            denom = np.where(denom == 0.0, 1.0, denom)
+            rel_err = abs_err / denom
+
+            max_abs = float(abs_err.max()) if abs_err.size > 0 else 0.0
+            max_rel = float(rel_err.max()) if rel_err.size > 0 else 0.0
+
+            bad_mask = abs_err > (atol + rtol * denom)
+            bad_indices = [tuple(idx) for idx in np.argwhere(bad_mask)]
+
+            diff_report[out_key][in_key] = {
+                "present_in_ad": True,
+                "present_in_fd": True,
+                "max_abs_err": max_abs,
+                "max_rel_err": max_rel,
+                "num_bad": int(bad_mask.sum()),
+                "bad_indices": bad_indices,
+            }
+
+            if verbose and (max_abs > atol and max_rel > rtol):
+                print(
+                    f"[{out_key}] wrt [{in_key}]: "
+                    f"max_abs_err={max_abs:.3e}, max_rel_err={max_rel:.3e}, "
+                    f"num_bad={len(bad_indices)}"
+                )
+
+    return fd_jac, ad_jac, diff_report

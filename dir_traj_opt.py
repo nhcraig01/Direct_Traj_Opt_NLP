@@ -12,7 +12,7 @@ import time
 from dataclasses import replace
 
 # Utilities
-from Lib.utilities import yaml_load, process_config, process_sparsity, prepare_prop_funcs, prepare_opt_funcs, prepare_sol, save_sol, save_OptimizerSol, load_OptimizerSol
+from Lib.utilities import check_jacobian_fd_vs_ad, yaml_load, process_config, process_sparsity, prepare_prop_funcs, prepare_opt_funcs, prepare_sol, save_sol, save_OptimizerSol, load_OptimizerSol
 
 # Math
 
@@ -40,7 +40,7 @@ if __name__ == "__main__":
     Problem_Type = "stochastic_gauss_zoh"
     Feedback_Control_Type = "true_state"
 
-    hot_start = True
+    hot_start = False
     hot_start_sol = "deterministic"
     # ---------------------------------------------------------------------------
     file_name = Problem_Type
@@ -56,10 +56,10 @@ if __name__ == "__main__":
     optOptions = {'Major optimality tolerance': 1e-5,  # Pretty much always keep this at 1.e-5 (linesearch_tol is more important)
                   'Major feasibility tolerance': 1e-6,  
                   'Minor feasibility tolerance': 1e-5,
-                  'Major iterations limit': 1000, 
+                  'Major iterations limit': 10000, 
                   'Partial prince': 10,                 # Maybe just keep at 1
-                  'Linesearch tolerance': .1,           # .5 for deterministic, .01 for stochastic
-                  'Function precision': 1e-12,
+                  'Linesearch tolerance': .99,           # .5 for deterministic, .01 for stochastic
+                  'Function precision': 1e-11,
                   'Verify level': -1,
                   'Nonderivative linesearch': 0,
                   'Elastic weight': 1.e6}
@@ -85,11 +85,15 @@ if __name__ == "__main__":
         init_guess['alpha'] = Boundary_Conds['alpha_min']
         init_guess['beta'] = Boundary_Conds['beta_min']
     if Problem_Type == 'stochastic_gauss_zoh':
-        init_guess['xi_arc_hst'] = 1e-1*jnp.ones(2*cfg_args.N_arcs)
+        init_guess['xi_arc_hst'] = 1e-2*jnp.ones(2*cfg_args.N_arcs)
     if hot_start:
         sol_hot = load_OptimizerSol(hot_start_file)
         for key in sol_hot.keys():
             init_guess[key] = sol_hot[key] 
+
+    # Check Gradients 
+    fd_jac, ad_jac, diff_report = check_jacobian_fd_vs_ad(vals, grad, init_guess, h=1e-6)
+
 
     # Process Sparsity for SNOPT
     print("Processing SNOPT Gradient Sparsity")

@@ -5,8 +5,8 @@ dynamics:
   type: "CR3BP"
   sys_param_file: '../CR3BP_dev/EarthMoon_System/EMsys.yaml'
 integration:
-  a_tol: 1.e-13
-  r_tol: 1.e-13
+  a_tol: 1.e-12
+  r_tol: 1.e-12
 traj_parameters:
   control_arcs: 40
   sub_arcs: 1
@@ -68,9 +68,9 @@ constraints:
       obj_body: 'r2'
       safe_d: 5000
     det:
-      bool: False
-    stat:
       bool: True
+    stat:
+      bool: False
       bound: .999
       UT:
         alpha: 1.0

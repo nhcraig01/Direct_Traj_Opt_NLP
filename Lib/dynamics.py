@@ -412,7 +412,7 @@ def propagator_gen(X0, U, t0, t1, EOM, prop_length, cfg_args):
                             X0, 
                             args=U,
                             stepsize_controller=stepsize_controller, 
-                            adjoint=dfx.DirectAdjoint(),
+                            adjoint=dfx.ForwardMode(),
                             saveat=save_t,
                             max_steps=16**5)
 
