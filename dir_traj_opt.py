@@ -32,12 +32,17 @@ if __name__ == "__main__":
     #   deterministic
     #   stochastic_gauss_zoh
     # 
+    # Gain Parameterization Types:
+    #   arc_lqr
+    #   fulltraj_lqr
+    # 
     # Feedback Controller Types:
     #   true_state
-    #   estimated_state
+    #   estimated_state (ONLY WORKS WITH 1 SUB-ARC AND 2 DETAILED SAVE POINTS (ONE ON EITHER END OF THE ARC)... FOR NOW)
     # ---------------------------------------------------------------------------
     folder_name = "Sandbox"
     Problem_Type = "stochastic_gauss_zoh"
+    Gain_Parametrization_Type = "fulltraj_lqr"
     Feedback_Control_Type = "true_state"
 
     hot_start = False
@@ -56,25 +61,26 @@ if __name__ == "__main__":
     optOptions = {'Major optimality tolerance': 1e-5,  # Pretty much always keep this at 1.e-5 (linesearch_tol is more important)
                   'Major feasibility tolerance': 1e-6,  
                   'Minor feasibility tolerance': 1e-5,
-                  'Major iterations limit': 10000, 
-                  'Partial prince': 10,                 # Maybe just keep at 1
+                  'Major iterations limit': 5000, 
+                  'Partial prince': 1,                 # Maybe just keep at 1
                   'Linesearch tolerance': .99,           # .5 for deterministic, .01 for stochastic
-                  'Function precision': 1e-11,
+                  'Function precision': 1e-12,
                   'Verify level': -1,
                   'Nonderivative linesearch': 0,
-                  'Elastic weight': 1.e6}
+                  'Elastic weight': 1.e10}
     # ---------------------------------------------------------------------------
 
 
     # Process Configuration - System Constants, optimization arguments, boundary conditions, dynamical eoms, and optimization type
     config = yaml_load(config_file)
-    Sys, models, Boundary_Conds, cfg_args, dyn_args = process_config(config, Problem_Type, Feedback_Control_Type)
+    Sys, models, Boundary_Conds, cfg_args, dyn_args = process_config(config, Problem_Type, Feedback_Control_Type, Gain_Parametrization_Type)
 
     # Propagation functions
     eom_e, propagators, iterators = prepare_prop_funcs(eoms_gen, models, propagator_gen, dyn_args, replace(cfg_args, N_save=2))
 
     # Optimization functions
-    vals, grad, sens = prepare_opt_funcs(Boundary_Conds, iterators, propagators, dyn_args, replace(cfg_args, N_save=2))
+    vals, grad, sens = prepare_opt_funcs(Boundary_Conds, iterators, propagators, models, dyn_args, replace(cfg_args, N_save=2))
+
 
     # Set up initial guess and hot starter
     print("Setting Up Initial Guess")
@@ -85,14 +91,14 @@ if __name__ == "__main__":
         init_guess['alpha'] = Boundary_Conds['alpha_min']
         init_guess['beta'] = Boundary_Conds['beta_min']
     if Problem_Type == 'stochastic_gauss_zoh':
-        init_guess['xi_arc_hst'] = 1e-2*jnp.ones(2*cfg_args.N_arcs)
+        if Gain_Parametrization_Type.lower() == 'arc_lqr':
+            init_guess['gain_weights'] = 1e-4*jnp.ones(2*cfg_args.N_arcs)
+        elif Gain_Parametrization_Type.lower() == 'fulltraj_lqr':
+            init_guess['gain_weights'] = 1e-1*jnp.ones(2)
     if hot_start:
         sol_hot = load_OptimizerSol(hot_start_file)
         for key in sol_hot.keys():
             init_guess[key] = sol_hot[key] 
-
-    # Check Gradients 
-    fd_jac, ad_jac, diff_report = check_jacobian_fd_vs_ad(vals, grad, init_guess, h=1e-6)
 
 
     # Process Sparsity for SNOPT
@@ -107,13 +113,15 @@ if __name__ == "__main__":
     optprop.addVarGroup('X0', 7, "c", value = init_guess['X0'], lower=[-10, -10, -10, -10, -10, -10, 1e-1], upper=[10, 10, 10, 10, 10, 10, 1])
     optprop.addVarGroup('Xf', 7, "c", value = init_guess['Xf'], lower=[-10, -10, -10, -10, -10, -10, 1e-1], upper=[10, 10, 10, 10, 10, 10, 1])
     if Problem_Type == 'stochastic_gauss_zoh':
-        optprop.addVarGroup('xi_arc_hst', 2*cfg_args.N_arcs, "c", value = init_guess['xi_arc_hst'], lower = 1e-5)
+        if Gain_Parametrization_Type.lower() == 'arc_lqr':
+            gain_weight_ln = 2*cfg_args.N_arcs
+        elif Gain_Parametrization_Type.lower() == 'fulltraj_lqr':
+            gain_weight_ln = 2
+        optprop.addVarGroup('gain_weights', gain_weight_ln, "c", value = init_guess['gain_weights'], lower = 1e-5, upper = 1)
     if cfg_args.free_phasing:
         optprop.addVarGroup('alpha', 1, "c", value = init_guess['alpha'], lower = Boundary_Conds['alpha_min'], upper = Boundary_Conds['alpha_max'])
         optprop.addVarGroup('beta', 1, "c", value = init_guess['beta'], lower = Boundary_Conds['beta_min'], upper = Boundary_Conds['beta_max'])
-
     optprop.addObj('o_mf')
-
     optprop.addConGroup('c_Us', cfg_args.N_arcs, upper = 1, jac = grad_proc_sparse['c_Us'])
     if Problem_Type == 'stochastic_gauss_zoh':
         optprop.addConGroup('c_P_Xf', 1, upper = 0, jac = grad_proc_sparse['c_P_Xf'])
@@ -136,7 +144,7 @@ if __name__ == "__main__":
     save_OptimizerSol(sol, cfg_args, OptimSol_save_file)
 
     # Analyze and Save Results
-    allData = prepare_sol(sol, Sys, Boundary_Conds, propagators, dyn_args, cfg_args)
+    allData = prepare_sol(sol, Sys, Boundary_Conds, propagators, models, dyn_args, cfg_args)
     save_sol(allData, Sys, save_file,dyn_args, cfg_args)
 
 

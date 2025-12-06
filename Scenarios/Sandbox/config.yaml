@@ -5,12 +5,12 @@ dynamics:
   type: "CR3BP"
   sys_param_file: '../CR3BP_dev/EarthMoon_System/EMsys.yaml'
 integration:
-  a_tol: 1.e-12
-  r_tol: 1.e-12
+  a_tol: 1.e-13
+  r_tol: 1.e-13
 traj_parameters:
   control_arcs: 40
   sub_arcs: 1
-  save_pts_detailed: 41
+  save_pts_detailed: 42
   MC_trials: 1000
 boundary_conditions:
   t0: "2026-01-01T00:00:00"
@@ -51,10 +51,11 @@ uncertainty:
       mass_sig: 60
   acc_sig: 5.e-12
   measurement:
-    type: 'range'
-    observer_body: 'r1'
+    type: 'position_test'
+    observer_body: 'r2'
     observer_alt_lat_lon: [6371., 0., 0.]
-    range_sig: 1.e-3
+    range_sig: 1.e-4
+    pos_sig: 1.e-4
   gates:
     fixed_mag: 1.e-3
     prop_mag: 1.e-3

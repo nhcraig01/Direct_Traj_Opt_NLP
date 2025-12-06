@@ -40,6 +40,10 @@ def CR3BPDynamics(U_Acc_min_nd, ve, mu, safe_d):
                         [v_z],
                         [m]])
 
+    controls = sp.Matrix([[u1],
+                          [u2],
+                          [u3]])
+
     term1 = -(1 - mu)*(r_x + mu)*dtmp - mu*(r_x - 1 + mu)*rtmp + r_x
     term2 = -(1 - mu)*r_y*dtmp - mu*r_y*rtmp + r_y
     term3 = -(1 - mu)*r_z*dtmp - mu*r_z*rtmp
@@ -61,22 +65,6 @@ def CR3BPDynamics(U_Acc_min_nd, ve, mu, safe_d):
     
     eoms = eoms_pre.subs(subs_dict)
 
-    inputs = sp.Matrix([[t],
-                        [r_x],
-                        [r_y],
-                        [r_z],
-                        [v_x],
-                        [v_y],
-                        [v_z],
-                        [m],
-                        [u1],
-                        [u2],
-                        [u3]])
-
-    controls = sp.Matrix([[u1],
-                          [u2],
-                          [u3]])
-
     Aprop = eoms.jacobian(states)
     Bprop = eoms.jacobian(controls)
 
@@ -84,7 +72,13 @@ def CR3BPDynamics(U_Acc_min_nd, ve, mu, safe_d):
     Aprop_eval = sp.lambdify((t, states, controls), Aprop, 'jax')
     Bprop_eval = sp.lambdify((t, states, controls), Bprop, 'jax')
 
-    return eom_eval, Aprop_eval, Bprop_eval
+    U_st_dyn = (1-mu)/dval + mu/rval + 0.5*(r_x**2 + r_y**2)
+    U_st_eval = sp.lambdify((states,), U_st_dyn, 'jax')
+
+    JC = 2*U_st_dyn + (v_x**2 + v_y**2 + v_z**2)
+    JC_eval = sp.lambdify((states,), JC, 'jax')
+
+    return eom_eval, Aprop_eval, Bprop_eval, U_st_eval, JC_eval
 
 def TrueStateFeedback_CovPropagators():
     
@@ -170,28 +164,29 @@ def EstimatedStateFeedback_CovPropagators():
         G_exe = ctrl_terms['G_exe']
 
         # Unpack the measurement values
-        H_k = meas_terms['H_k']
+        H_k1 = meas_terms['H_k1']
         P_v = meas_terms['P_v']
         
-        # Perform the measurement update if indicated
-        if meas_update:
-            # Compute the Kalman Gain
-            C_k = Ptild_k @ H_k.T
-            W_k = H_k @ Ptild_k @ H_k.T + P_v
-            L_k = jax.scipy.linalg.solv(W_k.T, C_k.T).T  # L_k = C_k @ jnp.linalg.inv(W_k)
-
-            # Update the covariance values
-            Phat_k_p = Phat_k + L_k @ W_k @ L_k.T
-            Ptild_k_p = (jnp.eye(7) - L_k @ H_k) @ Ptild_k @ (jnp.eye(7) - L_k @ H_k).T + L_k @ P_v @ L_k.T
-            
-            Phat_k = Phat_k_p
-            Ptild_k = Ptild_k_p
-
         # Perform the covariance time propagation
         Astar_k = A_k + B_k @ K_k
         
         Phat_k1 = Astar_k @ Phat_k @ Astar_k.T
         Ptild_k1 = A_k @ Ptild_k @ A_k.T + B_k @ (G_exe + G_stoch) @ B_k.T
+
+        # Perform the measurement update if indicated
+        if meas_update:
+            # Compute the Kalman Gain
+            C_k1 = Ptild_k1 @ H_k1.T
+            W_k1 = H_k1 @ Ptild_k1 @ H_k1.T + P_v
+            L_k1 = jax.scipy.linalg.solve(W_k1.T, C_k1.T).T  # L_k = C_k1 @ jnp.linalg.inv(W_k1)
+
+            # Update the covariance values
+            Phat_k1_p = Phat_k1 + L_k1 @ W_k1 @ L_k1.T
+            tmp_mat = jnp.eye(7) - L_k1 @ H_k1
+            Ptild_k1_p = tmp_mat @ Ptild_k1 @ tmp_mat.T + L_k1 @ P_v @ L_k1.T
+            
+            Phat_k1 = Phat_k1_p
+            Ptild_k1 = Ptild_k1_p
 
         vals_k1 = {'Phat_k1': Phat_k1,
                     'Ptild_k1': Ptild_k1,
@@ -199,7 +194,7 @@ def EstimatedStateFeedback_CovPropagators():
 
         return vals_k1
     
-    cov_propagators = {'perArc': perArc_propagator}
+    cov_propagators = {'perArc': perArc_propagator, 'subArc': perArc_propagator}
     return cov_propagators
 
 def AB_rev2fwd(A_rev, B_rev):
@@ -248,7 +243,7 @@ def MC_U_exe(U_nom, gates, rng_key):
 
     return U_exe
 
-def xi2K(xi_k, A_k, B_k):
+def xi2K(xi_k, A_k, B_k, U_mag):
     Bkr = B_k[:3,:]
     Bkv = B_k[3:6,:]
     
@@ -260,8 +255,94 @@ def xi2K(xi_k, A_k, B_k):
 
     return jnp.hstack([K_k, jnp.zeros((3,1))])
 
-xi2K_vmap = jax.vmap(xi2K, in_axes=(0, 0, 0))
+xi2K_vmap = jax.vmap(xi2K, in_axes=(0, 0, 0, 0))
 
+def GainParameterizers(Gain_Type):
+    ''' This functions returns a dictionary of gain parameterization functions based on the type selected
+    '''
+    
+    FeedbackGainFuncs = {}
+    
+    if Gain_Type.lower() == 'arc_lqr':
+        def xi2K(xi_k, A_k, B_k, U_mag = 1.0):
+            Bkr = B_k[:3,:]
+            Bkv = B_k[3:6,:]
+            
+            blkdiagr = xi_k[0]*jnp.linalg.inv(Bkr.T@Bkr)
+            blkdiagv = xi_k[1]*jnp.linalg.inv(Bkv.T@Bkv)
+
+            weights = jax.scipy.linalg.block_diag(blkdiagr, blkdiagv)
+            K_k = -jnp.linalg.inv(jnp.eye(3) + B_k[:6,:].T @ weights @ B_k[:6,:]) @ B_k[:6,:].T @ weights @ A_k[:6,:6]
+
+            return jnp.hstack([K_k, jnp.zeros((3,1))])
+
+        xi2K_vmap = jax.vmap(xi2K, in_axes=(0, 0, 0, 0))
+
+        FeedbackGainFuncs['xi2K'] = xi2K
+        FeedbackGainFuncs['xi2K_vmap'] = xi2K_vmap
+    elif Gain_Type.lower() == 'fulltraj_lqr':
+        def iterate_K(ii, input_dict):
+            # Unpack unchanged input terms
+            index_back = input_dict['index_back']
+            i = index_back[ii]
+            A_arc_hst = input_dict['A_arc_hst']
+            B_arc_hst = input_dict['B_arc_hst']
+            R_i = input_dict['R_i']
+
+            # Unpack modified 
+            K_arc_hst = input_dict['K_arc_hst']
+            S_i1 = input_dict['S_i1']
+
+            # Set temporary variables
+            A_i = A_arc_hst[i,:,:]
+            B_i = B_arc_hst[i,:,:]
+            Q_i = 1e-1*jnp.eye(6)
+
+            # Iterate and compute K_i and S_i
+            M_i = R_i + B_i.T @ S_i1 @ B_i
+            tmp_mat = jnp.linalg.solve(M_i,B_i.T @ S_i1) # M_i_inv @ B_i.T @ S_i1
+
+            K_i = - tmp_mat @ A_i
+            K_arc_hst = K_arc_hst.at[i,:,0:6].set(K_i)
+
+            S_i = A_i.T @ (S_i1 - S_i1 @ B_i @ tmp_mat) @ A_i + Q_i
+
+            output_dict = {'index_back': index_back, 'A_arc_hst': A_arc_hst, 'B_arc_hst': B_arc_hst,
+                           'K_arc_hst': K_arc_hst,'R_i': R_i, 'S_i1': S_i}
+
+            return output_dict
+        
+        def xi2K_vmap(xi, A_arc_hst, B_arc_hst, U_mag_arc_hst):
+            N_arcs = A_arc_hst.shape[0]
+            xi_r = xi[0]
+            xi_v = xi[1]
+
+            xi_r_mod = 0.9+0.1*xi_r
+            xi_v_mod = 0.9+0.1*xi_v
+
+            rho = (xi_r_mod + xi_v_mod)/2
+            R_i = (1-rho)*jnp.eye(3)
+
+            index_back = jnp.arange(N_arcs-1, -1, -1)
+
+            Q_f = jnp.diag(jnp.array([jnp.ones(3,)*xi_r_mod, jnp.ones(3,)*xi_v_mod]).flatten())
+
+            A_rv_arc_hst = A_arc_hst[:,:6,:6]
+            B_rv_arc_hst = B_arc_hst[:,:6,:]
+
+            K_arc_hst = jnp.zeros((N_arcs, 3, 7))
+
+            init_input = {'index_back': index_back, 'A_arc_hst': A_rv_arc_hst, 'B_arc_hst': B_rv_arc_hst,
+                          'K_arc_hst': K_arc_hst, 'R_i': R_i, 'S_i1': Q_f}
+            
+            final_output = jax.lax.fori_loop(0, N_arcs, iterate_K, init_input)
+            K_arc_hst = final_output['K_arc_hst']
+
+            return K_arc_hst
+        
+        FeedbackGainFuncs['xi2K_vmap'] = xi2K_vmap
+
+    return FeedbackGainFuncs
 
 # --------------------
 # Estimator Functions
@@ -348,7 +429,7 @@ def EKF_measurement(priori_vals_k, meas_terms):
 def range_measurement_model(r_obs, range_sig):
     # State to be estimated
     r_x, r_y, r_z, v_x, v_y, v_z, m = sp.symbols('r_x, r_y, r_z, v_x, v_y, v_z, m', real=True)
-    X = sp.Matrix([[r_x],
+    X_sym = sp.Matrix([[r_x],
                     [r_y],
                     [r_z],
                     [v_x],
@@ -357,20 +438,43 @@ def range_measurement_model(r_obs, range_sig):
                     [m]])
 
     # Observer position
-    [obs_x, obs_y, obs_z] = r_obs
+    obs_x, obs_y, obs_z = r_obs
 
     dist = sp.sqrt((r_x - obs_x)**2 + (r_y - obs_y)**2 + (r_z - obs_z)**2)
     dist = sp.Matrix([[dist]])
-    dist_jac = dist.jacobian(X)
+    dist_jac = dist.jacobian(X_sym)
 
-    h_eval = sp.lambdify(X, dist, 'jax')
-    H_eval = sp.lambdify(X, dist_jac, 'jax')
+    h_eval = sp.lambdify((X_sym,), dist, 'jax')
+    H_eval = sp.lambdify((X_sym,), dist_jac, 'jax')
     P_v_eval = lambda X: jnp.array([[range_sig**2]])
 
     meas_model = {'h_eval': h_eval, 'H_eval': H_eval, 'P_v_eval': P_v_eval}
 
     return meas_model
 
+def test_pos_measurement_model(pos_sig):
+    # State to be estimated
+    r_x, r_y, r_z, v_x, v_y, v_z, m = sp.symbols('r_x, r_y, r_z, v_x, v_y, v_z, m', real=True)
+    X_sym = sp.Matrix([[r_x],
+                    [r_y],
+                    [r_z],
+                    [v_x],
+                    [v_y],
+                    [v_z],
+                    [m]])
+
+    pos_meas = sp.Matrix([[r_x],
+                          [r_y],
+                          [r_z]])
+    pos_meas_jac = pos_meas.jacobian(X_sym)
+
+    h_eval = sp.lambdify((X_sym,), pos_meas, 'jax')
+    H_eval = sp.lambdify((X_sym,), pos_meas_jac, 'jax')
+    P_v_eval = lambda X: jnp.diag(jnp.array([pos_sig**2, pos_sig**2, pos_sig**2]))
+
+    meas_model = {'h_eval': h_eval, 'H_eval': H_eval, 'P_v_eval': P_v_eval}
+
+    return meas_model
 
 # --------------------------------
 # Numerical Propagation Functions
@@ -547,26 +651,28 @@ def forward_propagation_cov_iterate(i, input_dict, cov_propagators, dyn_args, cf
     K_arc_hst = input_dict['K_arc_hst']
     G_exe_arc_hst = input_dict['G_exe_arc_hst']
     # Unpack modified inputs
-    P0_arc = input_dict['P0_arc']
-    P_hst = input_dict['P_hst']
-    P_hst = P_hst.at[i,0,:,:].set(P0_arc)
     P_U_arc_hst = input_dict['P_U_arc_hst']
 
+    if cfg_args.feedback_type.lower() == 'true_state':
+        # Unpack modified inputs
+        P0_arc = input_dict['P0_arc']
+        P_hst = input_dict['P_hst']
+        P_hst = P_hst.at[i,0,:,:].set(P0_arc)
     if cfg_args.feedback_type.lower() == 'estimated_state':
         # Unpack unmodified inputs
-        Phat0_arc = input_dict['Phat0_arc']
-        Ptild0_arc = input_dict['Ptild0_arc']
         H_hst = input_dict['H_hst']
         P_v_hst = input_dict['P_v_hst']
         # Unpack modified inputs
+        Phat0_arc = input_dict['Phat0_arc']
+        Ptild0_arc = input_dict['Ptild0_arc']
         Phat_hst = input_dict['Phat_hst']
         Ptild_hst = input_dict['Ptild_hst']
 
     # Create input dict for subArc iterator
-    cov_input_dict = {'A_js': A_hst[i,:,:,:], 'B_js': B_hst[i,:,:,:], 
-                      'K_arc': K_arc_hst[i,:,:], 'G_stoch_arc': dyn_args['G_stoch'], 'G_exe_arc': G_exe_arc_hst[i,:,:],
-                      'P_js': P_hst[i,:,:,:]}
     if cfg_args.feedback_type.lower() == 'true_state':
+        cov_input_dict = {'A_js': A_hst[i,:,:,:], 'B_js': B_hst[i,:,:,:], 
+                        'K_arc': K_arc_hst[i,:,:], 'G_stoch_arc': dyn_args['G_stoch'], 'G_exe_arc': G_exe_arc_hst[i,:,:],
+                        'P_js': P_hst[i,:,:,:]}
         K_arc = K_arc_hst[i,:,:]
         P_U_arc = K_arc @ P0_arc @ K_arc.T
         P_U_arc_hst = P_U_arc_hst.at[i,:,:].set(P_U_arc)
@@ -575,44 +681,42 @@ def forward_propagation_cov_iterate(i, input_dict, cov_propagators, dyn_args, cf
         cov_input_dict['tau_j'] = P0_arc
         cov_input_dict['gam_j'] = jnp.zeros((7,3))
 
+        # Propagate covariance over the arc
+        cov_output_dict = jax.lax.fori_loop(0, cfg_args.N_subarcs, cov_propagators['subArc'], cov_input_dict)
+
     if cfg_args.feedback_type.lower() == 'estimated_state':
-        Phat_js = Phat_hst[i,:,:,:]
-        Ptild_js = Ptild_hst[i,:,:,:]
-        H_js = H_hst[i,:,:,:]
-        P_v_js = P_v_hst[i,:,:,:]
+        # Set Current terms
+        Phat_hst = Phat_hst.at[i,0,:,:].set(Phat0_arc)
+        Ptild_hst = Ptild_hst.at[i,0,:,:].set(Ptild0_arc)
+        K_arc = K_arc_hst[i,:,:]
         P_U_arc = K_arc @ Phat0_arc @ K_arc.T
         P_U_arc_hst = P_U_arc_hst.at[i,:,:].set(P_U_arc)
 
-        # Term similar to tau_j in the true state case
-        # Term similar to gam_j in the true state case
-        cov_input_dict['Phat_js'] = Phat_js
-        cov_input_dict['Ptild_js'] = Ptild_js
-        cov_input_dict['H_js'] = H_js
-        cov_input_dict['P_v_js'] = P_v_js
-        # additional terms not yet accounted for
+        # Propagate covariance over the arc
+        vals_k = {'Phat_k': Phat0_arc, 'Ptild_k': Ptild0_arc}
+        dyn_terms = {'A_k': A_hst[i,0,:,:], 'B_k': B_hst[i,0,:,:], 'G_stoch': dyn_args['G_stoch']}
+        ctrl_terms = {'K_k': K_arc_hst[i,:,:], 'G_exe': G_exe_arc_hst[i,:,:]}
+        meas_terms = {'H_k1': H_hst[i,1,:,:], 'P_v': P_v_hst[i,1,:,:]}
+        vals_k1 = cov_propagators['perArc'](vals_k, dyn_terms, ctrl_terms, meas_terms, meas_update=True)
     
-    cov_output_dict = jax.lax.fori_loop(0, cfg_args.N_subarcs, cov_propagators['subArc'], cov_input_dict)
 
     # Format high-level arc covariance outputs
-    P_js = cov_output_dict['P_js']
-    P_hst = P_hst.at[i,:,:,:].set(P_js)
-    P0_arc = P_hst[i,-1,:,:]
-    output_dict = {'A_hst': A_hst, 'B_hst': B_hst, 'K_arc_hst': K_arc_hst, 'G_exe_arc_hst': G_exe_arc_hst,
-                   'P0_arc': P0_arc, 'P_hst': P_hst, 'P_U_arc_hst': P_U_arc_hst}
+    if cfg_args.feedback_type.lower() == 'true_state':
+        P_js = cov_output_dict['P_js']
+        P_hst = P_hst.at[i,:,:,:].set(P_js)
+        P0_arc = P_hst[i,-1,:,:]
+        output_dict = {'A_hst': A_hst, 'B_hst': B_hst, 'K_arc_hst': K_arc_hst, 'G_exe_arc_hst': G_exe_arc_hst,
+                    'P0_arc': P0_arc, 'P_hst': P_hst, 'P_U_arc_hst': P_U_arc_hst}
     
     if cfg_args.feedback_type.lower() == 'estimated_state':
-        Phat_js = cov_output_dict['Phat_js']
-        Ptild_js = cov_output_dict['Ptild_js']
-        Phat0_arc = Phat_js[-1,:,:]
-        Ptild0_arc = Ptild_js[-1,:,:]
-        Phat_hst = Phat_hst.at[i,:,:,:].set(Phat_js)
-        Ptild_hst = Ptild_hst.at[i,:,:,:].set(Ptild_js)
-        output_dict['Phat_hst'] = Phat_hst
-        output_dict['Ptild_hst'] = Ptild_hst
-        output_dict['Phat0_arc'] = Phat0_arc
-        output_dict['Ptild0_arc'] = Ptild0_arc
-        output_dict['H_hst'] = H_hst
-        output_dict['P_v_hst'] = P_v_hst
+        Phat_hst = Phat_hst.at[i,1,:,:].set(vals_k1['Phat_k1'])
+        Ptild_hst = Ptild_hst.at[i,1,:,:].set(vals_k1['Ptild_k1'])
+        Phat0_arc = vals_k1['Phat_k1']
+        Ptild0_arc = vals_k1['Ptild_k1']
+        output_dict = {'A_hst': A_hst, 'B_hst': B_hst, 'K_arc_hst': K_arc_hst, 'G_exe_arc_hst': G_exe_arc_hst,
+                       'Phat0_arc': Phat0_arc, 'Ptild0_arc': Ptild0_arc,
+                       'Phat_hst': Phat_hst, 'Ptild_hst': Ptild_hst, 'P_U_arc_hst': P_U_arc_hst,
+                       'H_hst': H_hst, 'P_v_hst': P_v_hst}
 
     return output_dict
 
@@ -621,7 +725,7 @@ def forward_propagation_cov_iterate(i, input_dict, cov_propagators, dyn_args, cf
 # Constraint and Objective Function
 # -----------------------------------
 
-def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, dyn_args, cfg_args):
+def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, models, dyn_args, cfg_args):
     output_dict = {}
 
     # Unpack args
@@ -637,7 +741,10 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, dy
     Xf = inputs['Xf']
     U_arc_hst = inputs['U_arc_hst'].reshape(N_arcs,3)
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
-        xi_arc_hst = inputs['xi_arc_hst'].reshape(N_arcs,2)
+        if cfg_args.gain_param_type.lower() == 'arc_lqr':
+            gain_weights = inputs['gain_weights'].reshape(N_arcs,2)
+        elif cfg_args.gain_param_type.lower() == 'fulltraj_lqr':
+            gain_weights = inputs['gain_weights'].reshape(2)
     if cfg_args.free_phasing:
         alpha = inputs['alpha']
         beta = inputs['beta']
@@ -655,18 +762,17 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, dy
         A_arc_hst = jnp.zeros((N_arcs, 7, 7))
         B_arc_hst = jnp.zeros((N_arcs, 7, 3))
         P_hst = jnp.zeros((N_arcs, N_subarcs+1, 7, 7))
-        P0 = dyn_args['Phat_0'] + dyn_args['Ptild_0']
         K_arc_hst = jnp.zeros((N_arcs, 3, 7))
         P_U_arc_hst = jnp.zeros((N_arcs, 3, 3))
+        if cfg_args.feedback_type.lower() == 'true_state':
+            P0 = dyn_args['Phat_0'] + dyn_args['Ptild_0']
         if cfg_args.feedback_type.lower() == 'estimated_state':
-            H_hst = jnp.zeros((N_arcs, N_subarcs+1, 7, cfg_args.meas_dim))
+            H_hst = jnp.zeros((N_arcs, N_subarcs+1, cfg_args.meas_dim, 7))
             P_v_hst = jnp.zeros((N_arcs, N_subarcs+1, cfg_args.meas_dim, cfg_args.meas_dim))
             Phat_hst = jnp.zeros((N_arcs, N_subarcs+1, 7, 7))
             Ptild_hst = jnp.zeros((N_arcs, N_subarcs+1, 7, 7))
             Phat0 = dyn_args['Phat_0']
             Ptild0 = dyn_args['Ptild_0']
-            Phat_hst = Phat_hst.at[0,0,:,:].set(Phat0)
-            Ptild_hst = Ptild_hst.at[0,0,:,:].set(Ptild0)
 
     # Propagate state and first-order jacobians forward (to half) ------------------------
     # ------------------------------------------------------------------------------------
@@ -718,32 +824,30 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, dy
 
     # Propagate covariance forward through entire trajectory ------------------------------
     # -------------------------------------------------------------------------------------
+    eps = 1e-12
+    control_norms = jnp.sqrt(U_arc_hst[:, 0]**2 + U_arc_hst[:, 1]**2 + U_arc_hst[:, 2]**2 + eps)
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
-        K_arc_hst = xi2K_vmap(xi_arc_hst, A_arc_hst, B_arc_hst)
+        K_arc_hst = models['feedback_gains']['xi2K_vmap'](gain_weights, A_arc_hst, B_arc_hst, control_norms)
         G_exe_arc_hst = gates2Gexe_vmap(U_arc_hst, dyn_args['gates'])
-        cov_input_dict = {'A_hst': A_hst, 'B_hst': B_hst, 'K_arc_hst': K_arc_hst, 'G_exe_arc_hst': G_exe_arc_hst,
-                          'P0_arc': P0, 'P_hst': P_hst, 'P_U_arc_hst': P_U_arc_hst}
+        if cfg_args.feedback_type.lower() == 'true_state':
+            cov_input_dict = {'A_hst': A_hst, 'B_hst': B_hst, 'K_arc_hst': K_arc_hst, 'G_exe_arc_hst': G_exe_arc_hst,
+                            'P_hst': P_hst, 'P0_arc': P0, 'P_U_arc_hst': P_U_arc_hst}
         if cfg_args.feedback_type.lower() == 'estimated_state':
-            cov_input_dict['Phat_hst'] = Phat_hst
-            cov_input_dict['Ptild_hst'] = Ptild_hst
-            cov_input_dict['Phat0_arc'] = Phat0
-            cov_input_dict['Ptild0_arc'] = Ptild0
-            cov_input_dict['H_hst'] = H_hst
-            cov_input_dict['P_v_hst'] = P_v_hst
+            cov_input_dict = {'A_hst': A_hst, 'B_hst': B_hst, 'K_arc_hst': K_arc_hst, 'G_exe_arc_hst': G_exe_arc_hst,
+                              'Phat_hst': Phat_hst, 'Ptild_hst': Ptild_hst, 'Phat0_arc': Phat0, 'Ptild0_arc': Ptild0,
+                              'H_hst': H_hst, 'P_v_hst': P_v_hst, 'P_U_arc_hst': P_U_arc_hst}
         
         cov_out = jax.lax.fori_loop(0, N_arcs, iterators['cov_propagation_iterate_e'], cov_input_dict)
 
-        P_hst = cov_out['P_hst']
-        P_U_arc_hst = cov_out['P_U_arc_hst']
+        if cfg_args.feedback_type.lower() == 'true_state':
+            P_hst = cov_out['P_hst']
         if cfg_args.feedback_type.lower() == 'estimated_state':
             Phat_hst = cov_out['Phat_hst']
             Ptild_hst = cov_out['Ptild_hst']
-
+        P_U_arc_hst = cov_out['P_U_arc_hst']
 
     # Objective and Constraints ouputs ------------------------------------------------
     # ---------------------------------------------------------------------------------
-    eps = 1e-12
-    control_norms = jnp.sqrt(U_arc_hst[:, 0]**2 + U_arc_hst[:, 1]**2 + U_arc_hst[:, 2]**2 + eps)
     J_det = jnp.sum(control_norms)
 
     if cfg_args.det_or_stoch.lower() == 'deterministic':
@@ -757,10 +861,14 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, dy
         output_dict['c_Us'] = control_norms.flatten() + control_max_eig.flatten() # constraint - stochastic control norm
         Af = propagators['propagator_dX0_e'](Xf,jnp.zeros((3,)), dyn_args['t_node_bound'][-1], 
                                              dyn_args['t_node_bound'][-1]+dyn_args['tf_T'], cfg_args)
-        S_XT_inv = dyn_args['S_XT_targ_inv']
-        S_Xf_inv = S_XT_inv @ Af
-        tmp_P_Xf_val = S_Xf_inv @ P_hst[-1,-1,:,:] @ S_Xf_inv.T - jnp.eye(7)
-        output_dict['c_P_Xf'] = jnp.log10(mat_lmax(tmp_P_Xf_val)+1) # constraint - final state covariance
+        S_XT_targ_inv = dyn_args['S_XT_targ_inv']
+        S_Xf_targ_inv = S_XT_targ_inv @ Af
+        if cfg_args.feedback_type.lower() == 'true_state':
+            P_Xf_full = P_hst[-1,-1,:,:]
+        if cfg_args.feedback_type.lower() == 'estimated_state':
+            P_Xf_full = Phat_hst[-1,-1,:,:] + Ptild_hst[-1,-1,:,:]
+        tmp_P_Xf_con_val = S_Xf_targ_inv @ P_Xf_full @ S_Xf_targ_inv.T - jnp.eye(7)
+        output_dict['c_P_Xf'] = jnp.log10(mat_lmax(tmp_P_Xf_con_val)+1) # constraint - final state covariance
 
     if cfg_args.free_phasing:
         output_dict['c_X0'] = (X0[:7] - jnp.hstack([X_start.evaluate(alpha).flatten(), 1.])).flatten() # constraint - X0
@@ -808,7 +916,7 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, dy
                         jnp.max(jnp.abs(output_dict['c_X_mp'])),
                         jnp.max(output_dict['c_P_Xf']),
                         col_print,
-                        jnp.max(xi_arc_hst))
+                        jnp.max(gain_weights))
 
     return output_dict
 
@@ -816,14 +924,17 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, dy
 # ------------------
 # Solution Analysis
 # ------------------
-def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
+def sim_Det_traj(sol, Sys, propagators, models, dyn_args, cfg_args):
     # Unpack inputs
     t_node_bound = dyn_args['t_node_bound']
     X0_det = sol.xStar['X0']
     Xf_det = sol.xStar['Xf']
     U_arc_hst = sol.xStar['U_arc_hst'].reshape(cfg_args.N_arcs, 3)
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
-        xi_arc_hst = sol.xStar['xi_arc_hst'].reshape(cfg_args.N_arcs, 2)
+        if cfg_args.gain_param_type.lower() == 'arc_lqr':
+            gain_weights = sol.xStar['gain_weights'].reshape(cfg_args.N_arcs, 2)
+        elif cfg_args.gain_param_type.lower() == 'fulltraj_lqr':
+            gain_weights = sol.xStar['gain_weights']
 
     # Unpack propagators
     propagator_e = propagators['propagator_e']
@@ -843,7 +954,7 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
     U_hst = jnp.zeros((length, 3))
     t_hst = jnp.zeros((length,))
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
-        xi_hst = jnp.zeros((length, 2))
+        gain_weight_hst = jnp.zeros((length, 2))
         K_arc_hst = jnp.zeros((cfg_args.N_arcs, 3, 7))
         TCM_norm_bound_hst = jnp.zeros((length,))
         TCM_norm_dV_hst = jnp.zeros((length,))
@@ -852,38 +963,36 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
         A_hst = jnp.zeros((length-1, 7, 7))
         B_hst = jnp.zeros((length-1, 7, 3))
         K_hst = jnp.zeros((length-1, 3, 7))
+        A_arc_hst = jnp.zeros((cfg_args.N_arcs, 7, 7))
+        B_arc_hst = jnp.zeros((cfg_args.N_arcs, 7, 3))
         P_hst = jnp.zeros((length, 7, 7))
         P_Targ_hst = jnp.zeros((cfg_args.post_insert_length, 7, 7))
         P_u_hst = jnp.zeros((length-1, 3, 3))
+        if cfg_args.feedback_type.lower() == 'estimated_state':
+            H_hst = jnp.zeros((length, cfg_args.meas_dim, 7))
+            P_v_hst = jnp.zeros((length, cfg_args.meas_dim, cfg_args.meas_dim))
+            Phat_hst = jnp.zeros((length, 7, 7))
+            Ptild_hst = jnp.zeros((length, 7, 7))
     
     # Initialize first entries
     X_hst = X_hst.at[0,:].set(X0_det)
     X_node_hst = X_node_hst.at[0,:].set(X0_det)
     t_hst = t_hst.at[0].set(t_node_bound[0])
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
-        P_hst = P_hst.at[0,:,:].set(dyn_args['Phat_0']+dyn_args['Ptild_0'])
+        if cfg_args.feedback_type.lower() == 'true_state':
+            P_hst = P_hst.at[0,:,:].set(dyn_args['Phat_0']+dyn_args['Ptild_0'])
+        elif cfg_args.feedback_type.lower() == 'estimated_state':
+            Phat_hst = Phat_hst.at[0,:,:].set(dyn_args['Phat_0'])
+            Ptild_hst = Ptild_hst.at[0,:,:].set(dyn_args['Ptild_0'])
 
-    # Loop through each arc
+    # Propagate state and linearized dynamics across each arc
     for k in range(cfg_args.N_arcs):
         arc_i_0 = k*(arc_length-1)  # starting point index for this arc in saved history
         arc_i_f = (k+1)*(arc_length-1)  # starting point index for next arc in saved history
 
         # Get the initial conditions for this arc
         X0_arc = X_hst[arc_i_0,:]
-        U_arc = U_arc_hst[k,:]
-        if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
-            xi_arc = xi_arc_hst[k,:]
-            A_arc = propagator_dX0_e(X0_arc, U_arc, t_node_bound[k], t_node_bound[k+1], cfg_args)
-            B_arc = propagator_dU_e(X0_arc, U_arc, t_node_bound[k], t_node_bound[k+1], cfg_args)
-            K_arc = xi2K(xi_arc, A_arc, B_arc)
-            K_arc_hst = K_arc_hst.at[k,:,:].set(K_arc)
-            G_exe_arc = gates2Gexe(U_arc, dyn_args['gates'])
-            G_stoch_arc = dyn_args['G_stoch']
-            
-            P0_arc = P_hst[arc_i_0,:,:]
-            P_u_arc = K_arc @ P0_arc @ K_arc.T
-
-            # need to add terms here for navigational case
+        U_arc = U_arc_hst[k,:]            
 
         # Propagate the state across arc
         sol_f_arc = propagator_e(X0_arc, U_arc, t_node_bound[k], t_node_bound[k+1], cfg_args.arc_length_det, cfg_args)
@@ -894,10 +1003,44 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
         U_hst = U_hst.at[arc_i_0:arc_i_f,:].set(jnp.tile(U_arc, (arc_length-1,1)))
         X_node_hst = X_node_hst.at[k+1,:].set(X_hst_arc[-1,:])
 
-        # Propagate covariances if stochastic
+        # Compute and store linearized dynamics if stochastic
         if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
+            A_arc = propagator_dX0_e(X0_arc, U_arc, t_node_bound[k], t_node_bound[k+1], cfg_args)
+            B_arc = propagator_dU_e(X0_arc, U_arc, t_node_bound[k], t_node_bound[k+1], cfg_args)
+            A_arc_hst = A_arc_hst.at[k,:,:].set(A_arc)
+            B_arc_hst = B_arc_hst.at[k,:,:].set(B_arc)
+
+            tmp_A_js = propagator_dX0_arc_vmap_e(X_hst_arc[:-1,:], U_arc, t_hst_arc[:-1], t_hst_arc[1:], cfg_args)
+            tmp_B_js = propagator_dU_arc_vmap_e(X_hst_arc[:-1,:], U_arc, t_hst_arc[:-1], t_hst_arc[1:], cfg_args)
+            A_hst = A_hst.at[arc_i_0:arc_i_f,:,:].set(tmp_A_js)
+            B_hst = B_hst.at[arc_i_0:arc_i_f,:,:].set(tmp_B_js)
+
+            if cfg_args.feedback_type.lower() == 'estimated_state':
+                H_js = models['measurements']['H_vmap'](X_hst_arc)
+                P_v_js = models['measurements']['P_v_vmap'](X_hst_arc)
+                H_hst = H_hst.at[arc_i_0:arc_i_f+1,:,:].set(H_js)
+                P_v_hst = P_v_hst.at[arc_i_0:arc_i_f+1,:,:].set(P_v_js)
+
+    # Propagate covariances if stochastic
+    if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
+        # Compute feedback gains
+        K_arc_hst = models['feedback_gains']['xi2K_vmap'](gain_weights, A_arc_hst, B_arc_hst, jnp.linalg.norm(U_arc_hst, axis=1))
+        for k in range(cfg_args.N_arcs):
+            arc_i_0 = k*(arc_length-1)  # starting point index for this arc in saved history
+            arc_i_f = (k+1)*(arc_length-1)  # starting point index for next arc in saved history\
+
+            #gain_weight_arc = gain_weights[k,:]
+            K_arc = K_arc_hst[k,:,:]
+            U_arc = U_arc_hst[k,:]
+            K_arc_hst = K_arc_hst.at[k,:,:].set(K_arc)
+            G_exe_arc = gates2Gexe(U_arc, dyn_args['gates'])
+            G_stoch_arc = dyn_args['G_stoch']
+
             # Propagate control values and tile across arc
-            xi_hst = xi_hst.at[arc_i_0:arc_i_f,:].set(jnp.tile(xi_arc, (arc_length-1,1)))
+            P0_arc = P_hst[arc_i_0,:,:]
+            P_u_arc = K_arc @ P0_arc @ K_arc.T  
+
+            #xi_hst = xi_hst.at[arc_i_0:arc_i_f,:].set(jnp.tile(xi_arc, (arc_length-1,1)))
             K_hst = K_hst.at[arc_i_0:arc_i_f,:,:].set(jnp.tile(K_arc, (arc_length-1,1,1)))
             P_u_hst = P_u_hst.at[arc_i_0:arc_i_f,:,:].set(jnp.tile(P_u_arc, (arc_length-1,1,1)))
 
@@ -911,17 +1054,12 @@ def sim_Det_traj(sol, Sys, propagators, dyn_args, cfg_args):
             U_norm_bound_hst = U_norm_bound_hst.at[arc_i_0:arc_i_f].set(jnp.tile(U_norm_bound_arc, arc_length-1))
             U_norm_dV_hst = U_norm_dV_hst.at[arc_i_0:arc_i_f].set(jnp.tile(U_norm_dV_arc, arc_length-1))
 
-            # Solve for A and B matrices across arc
-            tmp_A_js = propagator_dX0_arc_vmap_e(X_hst_arc[:-1,:], U_arc, t_hst_arc[:-1], t_hst_arc[1:], cfg_args)
-            tmp_B_js = propagator_dU_arc_vmap_e(X_hst_arc[:-1,:], U_arc, t_hst_arc[:-1], t_hst_arc[1:], cfg_args)
-            A_hst = A_hst.at[arc_i_0:arc_i_f,:,:].set(tmp_A_js)
-            B_hst = B_hst.at[arc_i_0:arc_i_f,:,:].set(tmp_B_js)
 
             # Set input dict for arc covariance propagation
             cov_input_dict = {'A_js': A_hst[arc_i_0:arc_i_f,:,:],
-                              'B_js': B_hst[arc_i_0:arc_i_f,:,:],
-                              'K_arc': K_arc, 'G_stoch_arc': G_stoch_arc, 'G_exe_arc': G_exe_arc,
-                              'P_js': P_hst[arc_i_0:arc_i_f+1,:,:]}
+                                'B_js': B_hst[arc_i_0:arc_i_f,:,:],
+                                'K_arc': K_arc, 'G_stoch_arc': G_stoch_arc, 'G_exe_arc': G_exe_arc,
+                                'P_js': P_hst[arc_i_0:arc_i_f+1,:,:]}
             if cfg_args.feedback_type.lower() == 'true_state':
                 cov_input_dict['tau_j'] = P0_arc
                 cov_input_dict['gam_j'] = jnp.zeros((7,3))
@@ -1074,6 +1212,12 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagator):
                              lambda key: jnp.zeros(3,),
                              lambda key: jax.random.multivariate_normal(key, jnp.zeros(3,), dyn_args['G_stoch']),
                              keys_W_dyn[k])
+        
+        # Make ballistic if command control is low
+        #U_arc_tcm = jax.lax.cond(jnp.linalg.norm(U_arc_det) < 1e-5,
+        #                        lambda U: jnp.zeros(3,),
+        #                        lambda U: U,
+        #                        U_arc_tcm)
         
         U_arc_cmd = U_arc_det + U_arc_tcm
         U_arc_cmd_nsy = U_arc_cmd + U_arc_exe

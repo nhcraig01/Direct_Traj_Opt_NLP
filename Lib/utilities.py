@@ -6,7 +6,7 @@ from jax import numpy as jnp
 import diffrax as dfx
 
 from Lib.math import calc_t_elapsed_nd, sig2cov
-from Lib.dynamics import CR3BPDynamics, TrueStateFeedback_CovPropagators, EstimatedStateFeedback_CovPropagators, range_measurement_model, forward_propagation_iterate, backward_propagation_iterate, objective_and_constraints, forward_propagation_cov_iterate, sim_MC_trajs, sim_Det_traj
+from Lib.dynamics import CR3BPDynamics, TrueStateFeedback_CovPropagators, EstimatedStateFeedback_CovPropagators, GainParameterizers, range_measurement_model, test_pos_measurement_model, forward_propagation_iterate, backward_propagation_iterate, objective_and_constraints, forward_propagation_cov_iterate, sim_MC_trajs, sim_Det_traj
 
 from scipy import stats
 
@@ -72,7 +72,7 @@ def process_sparsity(grad_nonsparse):
     
     return grad_sparse
 
-def process_config(config, det_or_stoch: str, feedback_control_type: str):
+def process_config(config, det_or_stoch: str, feedback_control_type: str, gain_parametrization_type: str):
     """ This function processes the configuration file and returns the optimization arguments and boundary conditions
     """
     # Name
@@ -212,16 +212,21 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str):
     if config['dynamics']['type'] == 'CR3BP':
         dyn_safe = 1737.5/Sys['Ls']
 
-        eom_eval, Aprop_eval, Bprop_eval = CR3BPDynamics(U_Acc_min_nd, ve, Sys['mu'],dyn_safe)
+        eom_eval, Aprop_eval, Bprop_eval, U_st_eval, JC_eval = CR3BPDynamics(U_Acc_min_nd, ve, Sys['mu'],dyn_safe)
         dynamics = {'eom_eval': eom_eval,
                  'Aprop_eval': Aprop_eval, 
-                 'Bprop_eval': Bprop_eval}
+                 'Bprop_eval': Bprop_eval,
+                 'U_st_eval': U_st_eval,
+                 'JC_eval': JC_eval}
 
     # Choose Covariance Propagators
     if feedback_control_type.lower() == 'true_state':
         cov_propagators = TrueStateFeedback_CovPropagators()
     elif feedback_control_type.lower() == 'estimated_state':
         cov_propagators = EstimatedStateFeedback_CovPropagators()
+
+    # Choose Gain Parameterization
+    FeedbackGainFuncs = GainParameterizers(gain_parametrization_type)
 
     # Choose Measurement Model
     meas_type = config['uncertainty']['measurement']['type']
@@ -234,6 +239,10 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str):
         r_obs = (Sys['dim'][observer_body] + r_obs_body)/Sys['Ls']
         range_sig = config['uncertainty']['measurement']['range_sig']/Sys['Ls']
         meas_model = range_measurement_model(r_obs, range_sig)
+    elif meas_type.lower() == 'position_test':
+        meas_dim = 3
+        pos_sig = config['uncertainty']['measurement']['pos_sig']/Sys['Ls']
+        meas_model = test_pos_measurement_model(pos_sig)
 
     meas_model['h_vmap'] = jax.vmap(meas_model['h_eval'], in_axes=(0,))
     meas_model['H_vmap'] = jax.vmap(meas_model['H_eval'], in_axes=(0,))
@@ -242,7 +251,8 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str):
     # Create models dict
     models = {'dynamics': dynamics,
               'covariance': cov_propagators,
-              'measurement': meas_model}
+              'measurements': meas_model,
+              'feedback_gains': FeedbackGainFuncs}
 
     # Static configuration arguments
     @dataclass()
@@ -250,6 +260,7 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str):
         cfg_name: str
         det_or_stoch: str
         feedback_type: str
+        gain_param_type: str
         r_tol: float
         a_tol: float
         N_nodes: int
@@ -274,7 +285,7 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str):
         mx_tcm_bound: float
         mx_dV_bound: float
         mx_col_bound: float
-    cfg_args = args_static(cfg_name, det_or_stoch, feedback_control_type, r_tol, a_tol, N_nodes, N_arcs, N_subarcs, N_trials, 
+    cfg_args = args_static(cfg_name, det_or_stoch, feedback_control_type, gain_parametrization_type, r_tol, a_tol, N_nodes, N_arcs, N_subarcs, N_trials, 
                            N_save, arc_length_det, arc_length_opt, transfer_length_det, post_insert_length, length, meas_dim, ve, U_Acc_min_nd, 
                            True if phasing == 'free' else False, det_col_avoid, stat_col_avoid, alpha_UT, beta_UT, kappa_UT, 
                            mx_tcm_bound, mx_dV_bound, mx_col_bound)
@@ -336,9 +347,9 @@ def prepare_prop_funcs(eoms_gen, models, propagator_gen, dyn_args, cfg_args):
     iterators['backward_propagation_iterate_e'] = backward_propagation_iterate_e
     return eom_e, propagators, iterators
 
-def prepare_opt_funcs(Boundary_Conds, iterators, propagators, dyn_args, cfg_args):
+def prepare_opt_funcs(Boundary_Conds, iterators, propagators, models, dyn_args, cfg_args):
 
-    func = lambda inputs: objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, dyn_args, cfg_args)
+    func = lambda inputs: objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, models, dyn_args, cfg_args)
     vals = jax.jit(func, backend='cpu')
     grad = jax.jit(jax.jacfwd(func), backend='cpu')
     sens = jax.jit(lambda inputs, cvals: grad(inputs), backend='cpu')
@@ -350,7 +361,7 @@ def prepare_opt_funcs(Boundary_Conds, iterators, propagators, dyn_args, cfg_args
 # Solution Processing and Saving
 # -------------------------------
 
-def prepare_sol(solution, Sys, Boundary_Conds, propagators, dyn_args, cfg_args):
+def prepare_sol(solution, Sys, Boundary_Conds, propagators, models, dyn_args, cfg_args):
     
     t_node_bound = dyn_args['t_node_bound']
 
@@ -374,7 +385,7 @@ def prepare_sol(solution, Sys, Boundary_Conds, propagators, dyn_args, cfg_args):
     output['Orbf']['t_hst'] = ode_sol.ts
 
     print("Evaluating Detailed Deterministic Trajectory...")
-    output['Det'] = sim_Det_traj(solution, Sys, propagators, dyn_args, cfg_args)
+    output['Det'] = sim_Det_traj(solution, Sys, propagators, models, dyn_args, cfg_args)
 
     # Run Monte Carlo Simulations
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
@@ -476,7 +487,7 @@ def save_OptimizerSol(solution, cfg_arg, save_loc: str):
             f.create_dataset("alpha", data=solution.xStar['alpha'])
             f.create_dataset("beta", data=solution.xStar['beta'])
         if cfg_arg.det_or_stoch == 'stochastic_gauss_zoh':
-            f.create_dataset("xi_arc_hst", data=solution.xStar['xi_arc_hst'])
+            f.create_dataset("gain_weights", data=solution.xStar['gain_weights'])
     return
 
 def load_OptimizerSol(input_loc: str) -> dict:
@@ -489,8 +500,8 @@ def load_OptimizerSol(input_loc: str) -> dict:
             sol["alpha"] = f["alpha"][:]
         if "beta" in f.keys():
             sol["beta"] = f["beta"][:]
-        if "xi_arc_hst" in f.keys():
-            sol["xi_arc_hst"] = f["xi_arc_hst"][:]
+        if "gain_weights" in f.keys():
+            sol["gain_weights"] = f["gain_weights"][:]
 
     return sol
 
