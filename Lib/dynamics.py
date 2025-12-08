@@ -287,6 +287,8 @@ def GainParameterizers(Gain_Type):
             i = index_back[ii]
             A_arc_hst = input_dict['A_arc_hst']
             B_arc_hst = input_dict['B_arc_hst']
+            xi_r = input_dict['xi_r']
+            xi_v = input_dict['xi_v']
             R_i = input_dict['R_i']
 
             # Unpack modified 
@@ -296,7 +298,7 @@ def GainParameterizers(Gain_Type):
             # Set temporary variables
             A_i = A_arc_hst[i,:,:]
             B_i = B_arc_hst[i,:,:]
-            Q_i = 1e-1*jnp.eye(6)
+            Q_i = jnp.diag(jnp.array([jnp.ones(3,)*xi_r[i], jnp.ones(3,)*xi_v[i]]).flatten())
 
             # Iterate and compute K_i and S_i
             M_i = R_i + B_i.T @ S_i1 @ B_i
@@ -308,24 +310,30 @@ def GainParameterizers(Gain_Type):
             S_i = A_i.T @ (S_i1 - S_i1 @ B_i @ tmp_mat) @ A_i + Q_i
 
             output_dict = {'index_back': index_back, 'A_arc_hst': A_arc_hst, 'B_arc_hst': B_arc_hst,
-                           'K_arc_hst': K_arc_hst,'R_i': R_i, 'S_i1': S_i}
+                           'xi_r': xi_r, 'xi_v': xi_v, 'K_arc_hst': K_arc_hst,'R_i': R_i, 'S_i1': S_i}
 
             return output_dict
         
         def xi2K_vmap(xi, A_arc_hst, B_arc_hst, U_mag_arc_hst):
             N_arcs = A_arc_hst.shape[0]
-            xi_r = xi[0]
-            xi_v = xi[1]
+            xi_r = xi[:,0]
+            xi_v = xi[:,1]
 
-            xi_r_mod = 0.9+0.1*xi_r
-            xi_v_mod = 0.9+0.1*xi_v
+            #xi_r_mod = 0.9+0.1*xi_r
+            #xi_v_mod = 0.9+0.1*xi_v
 
-            rho = (xi_r_mod + xi_v_mod)/2
-            R_i = (1-rho)*jnp.eye(3)
+            #rho = (xi_r_mod + xi_v_mod)/2
+            #R_i = (1-rho)*jnp.eye(3)
+
+            #xi_r_mod = jnp.exp(xi_r)
+            #xi_v_mod = jnp.exp(xi_v)
+            xi_r_mod = xi_r*1e3
+            xi_v_mod = xi_v*1e3
+            R_i = jnp.eye(3)
 
             index_back = jnp.arange(N_arcs-1, -1, -1)
 
-            Q_f = jnp.diag(jnp.array([jnp.ones(3,)*xi_r_mod, jnp.ones(3,)*xi_v_mod]).flatten())
+            Q_f = jnp.diag(jnp.array([jnp.ones(3,)*xi_r_mod[-1], jnp.ones(3,)*xi_v_mod[-1]]).flatten())
 
             A_rv_arc_hst = A_arc_hst[:,:6,:6]
             B_rv_arc_hst = B_arc_hst[:,:6,:]
@@ -333,7 +341,7 @@ def GainParameterizers(Gain_Type):
             K_arc_hst = jnp.zeros((N_arcs, 3, 7))
 
             init_input = {'index_back': index_back, 'A_arc_hst': A_rv_arc_hst, 'B_arc_hst': B_rv_arc_hst,
-                          'K_arc_hst': K_arc_hst, 'R_i': R_i, 'S_i1': Q_f}
+                          'xi_r': xi_r, 'xi_v': xi_v, 'K_arc_hst': K_arc_hst, 'R_i': R_i, 'S_i1': Q_f, }
             
             final_output = jax.lax.fori_loop(0, N_arcs, iterate_K, init_input)
             K_arc_hst = final_output['K_arc_hst']
@@ -744,7 +752,7 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, mo
         if cfg_args.gain_param_type.lower() == 'arc_lqr':
             gain_weights = inputs['gain_weights'].reshape(N_arcs,2)
         elif cfg_args.gain_param_type.lower() == 'fulltraj_lqr':
-            gain_weights = inputs['gain_weights'].reshape(2)
+            gain_weights = inputs['gain_weights'].reshape(N_arcs,2)
     if cfg_args.free_phasing:
         alpha = inputs['alpha']
         beta = inputs['beta']
@@ -934,7 +942,7 @@ def sim_Det_traj(sol, Sys, propagators, models, dyn_args, cfg_args):
         if cfg_args.gain_param_type.lower() == 'arc_lqr':
             gain_weights = sol.xStar['gain_weights'].reshape(cfg_args.N_arcs, 2)
         elif cfg_args.gain_param_type.lower() == 'fulltraj_lqr':
-            gain_weights = sol.xStar['gain_weights']
+            gain_weights = sol.xStar['gain_weights'].reshape(cfg_args.N_arcs, 2)
 
     # Unpack propagators
     propagator_e = propagators['propagator_e']

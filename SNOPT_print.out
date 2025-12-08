@@ -11,8 +11,8 @@
       Minor iterations limit           10000
       Proximal iterations limit           10000
       Total character workspace             500
-      Total integer workspace           24500
-      Total real workspace           48500
+      Total integer workspace           32300
+      Total real workspace           64100
       Major optimality tolerance  1.00000000E-05
       Major feasibility tolerance  1.00000000E-06
       Minor feasibility tolerance  1.00000000E-05
@@ -22,7 +22,7 @@
       Function precision  1.00000000E-12
       Verify level              -1
       Nonderivative linesearch               0
-      Elastic weight  1.00000000E+10
+      Elastic weight  1.00000000E+08
 1
  
  SNMEMB EXIT 100 -- finished successfully
@@ -40,8 +40,8 @@
       Minor iterations limit           10000
       Proximal iterations limit           10000
       Total character workspace             500
-      Total integer workspace          193284
-      Total real workspace          171916
+      Total integer workspace          289848
+      Total real workspace          269845
       Major optimality tolerance  1.00000000E-05
       Major feasibility tolerance  1.00000000E-06
       Minor feasibility tolerance  1.00000000E-05
@@ -51,7 +51,7 @@
       Function precision  1.00000000E-12
       Verify level              -1
       Nonderivative linesearch               0
-      Elastic weight  1.00000000E+10
+      Elastic weight  1.00000000E+08
 1
  
  Parameters
@@ -75,19 +75,19 @@
  Scale tolerance........     0.900       Minor feasibility tol..  1.00E-05       Iteration limit........  10000000
  Scale option...........         0       Minor optimality  tol..  1.00E-06       Minor print level......         0
  Crash tolerance........     0.100       Pivot tolerance........  3.25E-11       New superbasics........        99
- Crash option...........         3       Elastic weight.........  1.00E+10
+ Crash option...........         3       Elastic weight.........  1.00E+08
 
  Partial pricing
  ---------------
- LP Partial price.......         1       Prtl price section ( A)       138       Prtl price section (-I)       102
- QP Partial price.......         1       Prtl price section ( A)       138       Prtl price section (-I)       102
+ LP Partial price.......         1       Prtl price section ( A)       216       Prtl price section (-I)       102
+ QP Partial price.......         1       Prtl price section ( A)       216       Prtl price section (-I)       102
 
  The SQP Method
  --------------
  Minimize...............                 Cold start.............                 Proximal Point method..     10000
- Nonlinear objectiv vars       138       Major optimality tol...  1.00E-05       Function precision.....  1.00E-12
- Unbounded step size....  1.00E+20       Superbasics limit......       138       Difference interval....  1.00E-06
- Unbounded objective....  1.00E+10       Reduced Hessian dim....       138       Central difference int.  1.00E-04
+ Nonlinear objectiv vars       216       Major optimality tol...  1.00E-05       Function precision.....  1.00E-12
+ Unbounded step size....  1.00E+20       Superbasics limit......       216       Difference interval....  1.00E-06
+ Unbounded objective....  1.00E+10       Reduced Hessian dim....       216       Central difference int.  1.00E-04
  Major step limit.......  2.00E+00       Nonderiv.  linesearch..                 Derivative level.......         3
  Major iterations limit.      5000       Linesearch tolerance...   0.99000       Verify level...........        -1
  Minor iterations limit.     10000       Penalty parameter......  0.00E+00       Major Print Level......         1
@@ -101,7 +101,7 @@
  Nonlinear constraints
  ---------------------
  Nonlinear constraints..       102       Major feasibility tol..  1.00E-06       Violation limit........  1.00E+01
- Nonlinear Jacobian vars       138
+ Nonlinear Jacobian vars       216
 
  Miscellaneous
  -------------
@@ -118,58 +118,58 @@
  -----------------
                Total      Normal        Free       Fixed     Bounded
  Rows            102          82           0          20           0
- Columns         138           0           0           0         138
+ Columns         216           0           0           0         216
 
- No. of matrix elements                14076     Density     100.000
+ No. of matrix elements                22032     Density     100.000
  Biggest  constant element        0.0000E+00  (excluding fixed columns,
  Smallest constant element        0.0000E+00   free rows, and RHS)
 
  No. of objective coefficients             0
 
  Nonlinear constraints     102     Linear constraints       0
- Nonlinear variables       138     Linear variables         0
- Jacobian  variables       138     Objective variables    138
- Total constraints         102     Total variables        138
+ Nonlinear variables       216     Linear variables         0
+ Jacobian  variables       216     Objective variables    216
+ Total constraints         102     Total variables        216
 1
  
 
  
- The user has defined   14076   out of   14076   constraint gradients.
- The user has defined     138   out of     138   objective  gradients.
+ The user has defined   22032   out of   22032   constraint gradients.
+ The user has defined     216   out of     216   objective  gradients.
 1
  
  
 
    Itns Major Minors    Step   nCon Feasible  Optimal  MeritFunction     L+U BSwap     nS condZHZ Penalty
-    232     0    232              1  7.2E-01  1.0E+00  3.5890036E+00    2258           78 8.1E+04         _  r
+    188     0    188              1  9.0E-01  1.5E+00  3.5829191E+00    2088           97 1.3E+04         _  r
  
 
    Itns Major Minors    Step   nCon Feasible  Optimal  MeritFunction     L+U BSwap     nS condZHZ Penalty
-    233     0      1              1  7.2E-01  1.0E+00  3.5890036E+00    2165           78 8.1E+04         _  r
+    189     0      1              1  9.0E-01  1.5E+00  3.5829191E+00    2047           97 1.3E+04         _  r
  
 
    Itns Major Minors    Step   nCon Feasible  Optimal  MeritFunction     L+U BSwap     nS condZHZ Penalty
-    237     0      4              1  7.2E-01  1.0E+00  3.5890036E+00    2115           78 8.1E+04         _  r
+    190     0      1              1  9.0E-01  1.5E+00  3.5829191E+00    2047           97 1.3E+04         _  r
 1
  
  SNOPTC EXIT  40 -- terminated after numerical difficulties
  SNOPTC INFO  41 -- current point cannot be improved
 
  Problem name                 Forward
- No. of iterations                 237   Objective            3.5890035659E+00
+ No. of iterations                 190   Objective            3.5829190873E+00
  No. of major iterations             0   Linear    obj. term  0.0000000000E+00
- Penalty parameter           0.000E+00   Nonlinear obj. term  3.5890035659E+00
+ Penalty parameter           0.000E+00   Nonlinear obj. term  3.5829190873E+00
  User function calls (total)        46   Calls with modes 1,2 (known g)      1
- No. of superbasics                 78   No. of basic nonlinears            32
- No. of degenerate steps             0   Percentage                       0.00
- Max x                     128 1.0E+00   Max pi                     10 8.5E+02
- Max Primal infeas         199 7.3E-01   Max Dual infeas            93 1.4E+03
- Nonlinear constraint violn    7.3E-01
+ No. of superbasics                 97   No. of basic nonlinears            30
+ No. of degenerate steps             1   Percentage                       0.53
+ Max x                     128 1.0E+00   Max pi                     10 9.3E+02
+ Max Primal infeas         277 9.2E-01   Max Dual infeas            93 1.5E+03
+ Nonlinear constraint violn    9.2E-01
 1
  
- Name           Forward                  Objective Value      3.5890035659E+00
+ Name           Forward                  Objective Value      3.5829190873E+00
 
- Status         Optimal Soln             Iteration    237    Superbasics    78
+ Status         Optimal Soln             Iteration    190    Superbasics    97
 
  Objective      -------- (Min)
  RHS            --------
@@ -180,255 +180,333 @@
 
   Number  ...Row.. State  ...Value......  Slack Value...  ..Lower Limit.  ..Upper Limit.  .Dual Variable    ..i
  
-     139  r      1    EQ        -0.00000        -0.00000          .               .              5.21715      1
-     140  r      2    EQ         0.00000         0.00000          .               .             -4.52274      2
-     141  r      3    EQ         0.00000         0.00000          .               .            339.19112      3
-     142  r      4    EQ         0.00000         0.00000          .               .            467.97553      4
-     143  r      5    EQ         0.00000         0.00000          .               .             28.23811      5
-     144  r      6    EQ        -0.00000        -0.00000          .               .            630.62913      6
-     145  r      7    EQ          .               .               .               .            153.61276      7
-     146  r      8    EQ        -0.00000        -0.00000          .               .            313.26644      8
-     147  r      9    EQ        -0.00000        -0.00000          .               .             29.64300      9
-     148  r     10    EQ         0.00000         0.00000          .               .            851.90914     10
-     149  r     11    EQ        -0.00000        -0.00000          .               .           -196.51265     11
-     150  r     12    EQ        -0.00000        -0.00000          .               .            -61.59466     12
-     151  r     13    EQ        -0.00000        -0.00000          .               .           -191.19502     13
-     152  r     14    EQ        -0.00000        -0.00000          .               .            113.64384     14
-     153  r     15    EQ         0.00000         0.00000          .               .            -40.10687     15
-     154  r     16    EQ        -0.00000        -0.00000          .               .           -191.17296     16
-     155  r     17    EQ        -0.00000        -0.00000          .               .            585.62870     17
-     156  r     18    EQ         0.00000         0.00000          .               .            -98.69635     18
-     157  r     19    EQ         0.00000         0.00000          .               .            754.36804     19
-     158  r     20    EQ        -0.00000        -0.00000          .               .            -62.03312     20
-     159  r     21    UL         1.00727         0.00727           None          1.0           -17.30903     21
-     160  r     22   SBS         0.45508        -0.54492           None          1.0             0.00000     22
-     161  r     23    BS         0.00690        -0.99310           None          1.0              .          23
-     162  r     24 N  FR         0.00654        -0.99346           None          1.0            -1.76545     24
-     163  r     25   SBS         0.00616        -0.99384           None          1.0            -0.00000     25
-     164  r     26   SBS         0.00579        -0.99421           None          1.0             0.00000     26
-     165  r     27    BS         0.00546        -0.99454           None          1.0              .          27
-     166  r     28    BS         0.00519        -0.99481           None          1.0              .          28
-     167  r     29   SBS         0.00496        -0.99504           None          1.0            -0.00000     29
-     168  r     30   SBS         0.00475        -0.99525           None          1.0             0.00000     30
-     169  r     31    BS         0.00452        -0.99548           None          1.0              .          31
-     170  r     32    BS         0.00430        -0.99570           None          1.0              .          32
-     171  r     33    BS         0.00409        -0.99591           None          1.0              .          33
-     172  r     34   SBS         0.78941        -0.21059           None          1.0            -0.00000     34
-     173  r     35    BS         0.00386        -0.99614           None          1.0              .          35
-     174  r     36   SBS         0.00373        -0.99627           None          1.0             0.00000     36
-     175  r     37   SBS         0.00363        -0.99637           None          1.0            -0.00000     37
-     176  r     38    BS         0.00356        -0.99644           None          1.0              .          38
-     177  r     39    BS         0.00352        -0.99648           None          1.0              .          39
-     178  r     40    BS         0.00353        -0.99647           None          1.0              .          40
-     179  r     41    BS         0.00358        -0.99642           None          1.0              .          41
-     180  r     42    BS         0.00367        -0.99633           None          1.0              .          42
-     181  r     43    BS         0.00378        -0.99622           None          1.0              .          43
-     182  r     44    BS         0.00392        -0.99608           None          1.0              .          44
-     183  r     45    BS         0.00407        -0.99593           None          1.0              .          45
-     184  r     46    BS         0.00423        -0.99577           None          1.0              .          46
-     185  r     47    BS         0.00438        -0.99562           None          1.0              .          47
-     186  r     48    BS         0.00445        -0.99555           None          1.0              .          48
-     187  r     49    BS         0.00451        -0.99549           None          1.0              .          49
-     188  r     50    BS         0.00511        -0.99489           None          1.0              .          50
-     189  r     51    BS         0.00642        -0.99358           None          1.0              .          51
-     190  r     52    BS         0.65657        -0.34343           None          1.0              .          52
-     191  r     53    BS         0.00623        -0.99377           None          1.0              .          53
-     192  r     54    BS         0.00533        -0.99467           None          1.0              .          54
-     193  r     55    BS         0.00474        -0.99526           None          1.0              .          55
-     194  r     56    BS         0.00428        -0.99572           None          1.0              .          56
-     195  r     57    BS         0.00391        -0.99609           None          1.0              .          57
-     196  r     58    BS         0.00362        -0.99638           None          1.0              .          58
-     197  r     59    BS         0.00346        -0.99654           None          1.0              .          59
-     198  r     60    BS         0.52048        -0.47952           None          1.0              .          60
-     199  r     61    UL         0.73321         0.73321           None           .             -0.01882     61
-     200  r     62    BS        -0.21035        -0.21035           None           .               .          62
-     201  r     63    BS        -0.20846        -0.20846           None           .               .          63
-     202  r     64    BS        -0.20669        -0.20669           None           .               .          64
-     203  r     65    BS        -0.20530        -0.20530           None           .               .          65
-     204  r     66    BS        -0.20341        -0.20341           None           .               .          66
-     205  r     67    BS        -0.20056        -0.20056           None           .               .          67
-     206  r     68    BS        -0.19649        -0.19649           None           .               .          68
-     207  r     69    BS        -0.19133        -0.19133           None           .               .          69
-     208  r     70    BS        -0.18572        -0.18572           None           .               .          70
-     209  r     71    BS        -0.18080        -0.18080           None           .               .          71
-     210  r     72    BS        -0.17806        -0.17806           None           .               .          72
-     211  r     73    BS        -0.17902        -0.17902           None           .               .          73
-     212  r     74    BS        -0.18465        -0.18465           None           .               .          74
-     213  r     75    BS        -0.19502        -0.19502           None           .               .          75
-     214  r     76    BS        -0.20918        -0.20918           None           .               .          76
-     215  r     77    BS        -0.22413        -0.22413           None           .               .          77
-     216  r     78    BS        -0.23862        -0.23862           None           .               .          78
-     217  r     79    BS        -0.25175        -0.25175           None           .               .          79
-     218  r     80    BS        -0.26272        -0.26272           None           .               .          80
-     219  r     81    BS        -0.27085        -0.27085           None           .               .          81
-     220  r     82    BS        -0.27550        -0.27550           None           .               .          82
-     221  r     83    BS        -0.27617        -0.27617           None           .               .          83
-     222  r     84    BS        -0.27242        -0.27242           None           .               .          84
-     223  r     85    BS        -0.26389        -0.26389           None           .               .          85
-     224  r     86    BS        -0.25033        -0.25033           None           .               .          86
-     225  r     87    BS        -0.23155        -0.23155           None           .               .          87
-     226  r     88    BS        -0.20744        -0.20744           None           .               .          88
-     227  r     89    BS        -0.17788        -0.17788           None           .               .          89
-     228  r     90    BS        -0.14268        -0.14268           None           .               .          90
-     229  r     91    BS        -0.10120        -0.10120           None           .               .          91
-     230  r     92    BS        -0.05159        -0.05159           None           .               .          92
-     231  r     93 N  FR        -0.01343        -0.01343           None           .           -786.09835     93
-     232  r     94    BS        -0.06351        -0.06351           None           .               .          94
-     233  r     95    BS        -0.10106        -0.10106           None           .               .          95
-     234  r     96    BS        -0.12902        -0.12902           None           .               .          96
-     235  r     97    BS        -0.14960        -0.14960           None           .               .          97
-     236  r     98    BS        -0.16373        -0.16373           None           .               .          98
-     237  r     99    BS        -0.17175        -0.17175           None           .               .          99
-     238  r    100    BS        -0.17375        -0.17375           None           .               .         100
-     239  r    101    BS        -0.16959        -0.16959           None           .               .         101
-     240  r    102    BS        -0.16007        -0.16007           None           .               .         102
+     217  r      1    EQ        -0.00000        -0.00000          .               .             89.02796      1
+     218  r      2    EQ         0.00000         0.00000          .               .           -141.03914      2
+     219  r      3    EQ         0.00000         0.00000          .               .            262.58850      3
+     220  r      4    EQ         0.00000         0.00000          .               .            483.19516      4
+     221  r      5    EQ         0.00000         0.00000          .               .            -76.17062      5
+     222  r      6    EQ        -0.00000        -0.00000          .               .            391.40466      6
+     223  r      7    EQ          .               .               .               .            159.46466      7
+     224  r      8    EQ        -0.00000        -0.00000          .               .            218.18528      8
+     225  r      9    EQ        -0.00000        -0.00000          .               .             -1.97888      9
+     226  r     10    EQ         0.00000         0.00000          .               .            928.07495     10
+     227  r     11    EQ        -0.00000        -0.00000          .               .           -193.46999     11
+     228  r     12    EQ        -0.00000        -0.00000          .               .            -59.10096     12
+     229  r     13    EQ        -0.00000        -0.00000          .               .           -218.10653     13
+     230  r     14    EQ        -0.00000        -0.00000          .               .             45.58643     14
+     231  r     15    EQ         0.00000         0.00000          .               .             -5.44124     15
+     232  r     16    EQ        -0.00000        -0.00000          .               .             35.96669     16
+     233  r     17    EQ        -0.00000        -0.00000          .               .            468.73992     17
+     234  r     18    EQ         0.00000         0.00000          .               .           -126.21530     18
+     235  r     19    EQ         0.00000         0.00000          .               .            515.35842     19
+     236  r     20    EQ        -0.00000        -0.00000          .               .            -70.98083     20
+     237  r     21    UL         1.00731         0.00731           None          1.0           -25.43868     21
+     238  r     22   SBS         0.45510        -0.54490           None          1.0             0.00000     22
+     239  r     23    BS         0.00692        -0.99308           None          1.0              .          23
+     240  r     24 N  FR         0.00655        -0.99345           None          1.0            -0.45399     24
+     241  r     25   SBS         0.00617        -0.99383           None          1.0            -0.00000     25
+     242  r     26   SBS         0.00580        -0.99420           None          1.0            -0.00000     26
+     243  r     27    BS         0.00548        -0.99452           None          1.0              .          27
+     244  r     28    BS         0.00522        -0.99478           None          1.0              .          28
+     245  r     29    BS         0.00502        -0.99498           None          1.0              .          29
+     246  r     30    BS         0.00485        -0.99515           None          1.0              .          30
+     247  r     31    BS         0.00467        -0.99533           None          1.0              .          31
+     248  r     32    BS         0.00449        -0.99551           None          1.0              .          32
+     249  r     33    BS         0.00432        -0.99568           None          1.0              .          33
+     250  r     34   SBS         0.78968        -0.21032           None          1.0             0.00000     34
+     251  r     35    BS         0.00417        -0.99583           None          1.0              .          35
+     252  r     36   SBS         0.00405        -0.99595           None          1.0             0.00000     36
+     253  r     37   SBS         0.00395        -0.99605           None          1.0            -0.00000     37
+     254  r     38    BS         0.00386        -0.99614           None          1.0              .          38
+     255  r     39    BS         0.00378        -0.99622           None          1.0              .          39
+     256  r     40    BS         0.00369        -0.99631           None          1.0              .          40
+     257  r     41    BS         0.00361        -0.99639           None          1.0              .          41
+     258  r     42    BS         0.00358        -0.99642           None          1.0              .          42
+     259  r     43    BS         0.00366        -0.99634           None          1.0              .          43
+     260  r     44    BS         0.00378        -0.99622           None          1.0              .          44
+     261  r     45    BS         0.00389        -0.99611           None          1.0              .          45
+     262  r     46    BS         0.00397        -0.99603           None          1.0              .          46
+     263  r     47    BS         0.00400        -0.99600           None          1.0              .          47
+     264  r     48    BS         0.00401        -0.99599           None          1.0              .          48
+     265  r     49    BS         0.00419        -0.99581           None          1.0              .          49
+     266  r     50    BS         0.00483        -0.99517           None          1.0              .          50
+     267  r     51    BS         0.00613        -0.99387           None          1.0              .          51
+     268  r     52    BS         0.65616        -0.34384           None          1.0              .          52
+     269  r     53    BS         0.00564        -0.99436           None          1.0              .          53
+     270  r     54    BS         0.00470        -0.99530           None          1.0              .          54
+     271  r     55    BS         0.00407        -0.99593           None          1.0              .          55
+     272  r     56    BS         0.00358        -0.99642           None          1.0              .          56
+     273  r     57    BS         0.00316        -0.99684           None          1.0              .          57
+     274  r     58    BS         0.00283        -0.99717           None          1.0              .          58
+     275  r     59    BS         0.00259        -0.99741           None          1.0              .          59
+     276  r     60    BS         0.51945        -0.48055           None          1.0              .          60
+     277  r     61    UL         0.91976         0.91976           None           .             -0.02072     61
+     278  r     62    BS        -0.21035        -0.21035           None           .               .          62
+     279  r     63    BS        -0.20846        -0.20846           None           .               .          63
+     280  r     64    BS        -0.20669        -0.20669           None           .               .          64
+     281  r     65    BS        -0.20530        -0.20530           None           .               .          65
+     282  r     66    BS        -0.20341        -0.20341           None           .               .          66
+     283  r     67    BS        -0.20056        -0.20056           None           .               .          67
+     284  r     68    BS        -0.19649        -0.19649           None           .               .          68
+     285  r     69    BS        -0.19133        -0.19133           None           .               .          69
+     286  r     70    BS        -0.18572        -0.18572           None           .               .          70
+     287  r     71    BS        -0.18080        -0.18080           None           .               .          71
+     288  r     72    BS        -0.17806        -0.17806           None           .               .          72
+     289  r     73    BS        -0.17902        -0.17902           None           .               .          73
+     290  r     74    BS        -0.18465        -0.18465           None           .               .          74
+     291  r     75    BS        -0.19502        -0.19502           None           .               .          75
+     292  r     76    BS        -0.20918        -0.20918           None           .               .          76
+     293  r     77    BS        -0.22413        -0.22413           None           .               .          77
+     294  r     78    BS        -0.23862        -0.23862           None           .               .          78
+     295  r     79    BS        -0.25175        -0.25175           None           .               .          79
+     296  r     80    BS        -0.26272        -0.26272           None           .               .          80
+     297  r     81    BS        -0.27085        -0.27085           None           .               .          81
+     298  r     82    BS        -0.27550        -0.27550           None           .               .          82
+     299  r     83    BS        -0.27617        -0.27617           None           .               .          83
+     300  r     84    BS        -0.27242        -0.27242           None           .               .          84
+     301  r     85    BS        -0.26389        -0.26389           None           .               .          85
+     302  r     86    BS        -0.25033        -0.25033           None           .               .          86
+     303  r     87    BS        -0.23155        -0.23155           None           .               .          87
+     304  r     88    BS        -0.20744        -0.20744           None           .               .          88
+     305  r     89    BS        -0.17788        -0.17788           None           .               .          89
+     306  r     90    BS        -0.14268        -0.14268           None           .               .          90
+     307  r     91    BS        -0.10120        -0.10120           None           .               .          91
+     308  r     92    BS        -0.05159        -0.05159           None           .               .          92
+     309  r     93 N  FR        -0.01343        -0.01343           None           .           -748.56096     93
+     310  r     94    BS        -0.06351        -0.06351           None           .               .          94
+     311  r     95    BS        -0.10106        -0.10106           None           .               .          95
+     312  r     96    BS        -0.12902        -0.12902           None           .               .          96
+     313  r     97    BS        -0.14960        -0.14960           None           .               .          97
+     314  r     98    BS        -0.16373        -0.16373           None           .               .          98
+     315  r     99    BS        -0.17175        -0.17175           None           .               .          99
+     316  r    100    BS        -0.17375        -0.17375           None           .               .         100
+     317  r    101    BS        -0.16959        -0.16959           None           .               .         101
+     318  r    102    BS        -0.16007        -0.16007           None           .               .         102
 1
  
  Section 2 - Variables
 
   Number  .Column. State  ...Value......  .Obj Gradient.  ..Lower Limit.  ..Upper Limit.  .Dual Variable    m+j
  
-       1  x      1 N SBS        -0.21215        -0.20315        -1.0             1.0            42.40663    103
-       2  x      2    BS         0.97411         0.96456        -1.0             1.0            15.67690    104
-       3  x      3 N SBS        -0.07814        -0.07297        -1.0             1.0            68.46732    105
-       4  x      4 N SBS        -0.07231        -0.15517        -1.0             1.0            46.08849    106
-       5  x      5    BS         0.43709         0.96472        -1.0             1.0           -11.08659    107
-       6  x      6 N SBS        -0.06592        -0.14081        -1.0             1.0            65.34218    108
-       7  x      7    BS        -0.00000        -5.50817        -1.0             1.0            37.70001    109
-       8  x      8    BS         0.00000        14.89273        -1.0             1.0            -0.57336    110
-       9  x      9 N SBS        -0.00000        -4.92331        -1.0             1.0            53.18674    111
-      10  x     10 N SBS        -0.00000       -27.77902        -1.0             1.0            16.04534    112
-      11  x     11    BS         0.00000        52.55412        -1.0             1.0            25.20951    113
-      12  x     12 N SBS        -0.00000       -20.08160        -1.0             1.0            33.15930    114
-      13  x     13    BS        -0.00000       -83.14049        -1.0             1.0           -41.00222    115
-      14  x     14    BS         0.00000       101.32739        -1.0             1.0            65.79892    116
-      15  x     15 N SBS        -0.00000       -38.77270        -1.0             1.0             6.78672    117
-      16  x     16 N  FR        -0.00000      -175.41139        -1.0             1.0          -135.73149    118
-      17  x     17 N SBS         0.00000       131.92541        -1.0             1.0            90.41787    119
-      18  x     18    BS        -0.00000       -37.20465        -1.0             1.0            -1.36099    120
-      19  x     19 N  FR        -0.00000      -261.37745        -1.0             1.0          -224.88356    121
-      20  x     20 N SBS         0.00000       118.47240        -1.0             1.0            70.94282    122
-      21  x     21 N SBS        -0.00000         1.62748        -1.0             1.0            26.50954    123
-      22  x     22 N  FR        -0.00000      -266.33226        -1.0             1.0          -233.68490    124
-      23  x     23 N SBS         0.00000        70.02773        -1.0             1.0            15.85559    125
-      24  x     24 N SBS        -0.00000        48.05593        -1.0             1.0            61.17714    126
-      25  x     25 N  FR        -0.00000      -184.30391        -1.0             1.0          -156.33948    127
-      26  x     26    BS         0.00000        27.93043        -1.0             1.0           -33.57557    128
-      27  x     27 N SBS        -0.00000        55.65101        -1.0             1.0            56.40238    129
-      28  x     28    BS        -0.00000       -91.43073        -1.0             1.0           -70.07766    130
-      29  x     29 N SBS         0.00000        11.86025        -1.0             1.0           -57.10197    131
-      30  x     30 N SBS        -0.00000        32.95209        -1.0             1.0            21.13996    132
-      31  x     31 N SBS        -0.00000       -35.07816        -1.0             1.0           -23.44279    133
-      32  x     32 N SBS         0.00000         8.11187        -1.0             1.0           -67.29543    134
-      33  x     33 N SBS        -0.00000        12.87288        -1.0             1.0           -10.70888    135
-      34  x     34 N SBS        -0.00000        -9.58876        -1.0             1.0           -10.70464    136
-      35  x     35 N SBS         0.00000         4.76948        -1.0             1.0           -74.52032    137
-      36  x     36 N SBS        -0.00000         3.49137        -1.0             1.0           -30.23536    138
-      37  x     37 N SBS        -0.00000        -0.99788        -1.0             1.0           -16.55272    139
-      38  x     38 N SBS         0.00001         1.63706        -1.0             1.0           -77.59896    140
-      39  x     39 N SBS         0.00000         0.43056        -1.0             1.0           -41.70063    141
-      40  x     40 N SBS         0.05876         0.07464        -1.0             1.0           -29.81083    142
-      41  x     41 N  FR         0.78285         0.99830        -1.0             1.0           -73.74131    143
-      42  x     42 N SBS         0.02639         0.03447        -1.0             1.0           -49.24905    144
-      43  x     43 N SBS         0.00000        -1.21571        -1.0             1.0           -43.82706    145
-      44  x     44 N SBS         0.00001         3.45085        -1.0             1.0           -62.78033    146
-      45  x     45 N SBS         0.00000         0.80843        -1.0             1.0           -54.80260    147
-      46  x     46    BS         0.00000        -6.05625        -1.0             1.0           -59.22906    148
-      47  x     47    BS         0.00000        19.99464        -1.0             1.0           -34.38417    149
-      48  x     48 N SBS         0.00000         5.58861        -1.0             1.0           -55.58209    150
-      49  x     49 N SBS         0.00000        -7.22602        -1.0             1.0           -68.89594    151
-      50  x     50    BS         0.00000        62.22974        -1.0             1.0            22.67973    152
-      51  x     51 N SBS         0.00000        19.71238        -1.0             1.0           -46.11125    153
-      52  x     52 N SBS         0.00000        12.06999        -1.0             1.0           -56.34366    154
-      53  x     53 N  FR         0.00000       127.14637        -1.0             1.0           105.50626    155
-      54  x     54 N SBS         0.00000        52.26525        -1.0             1.0           -16.83843    156
-      55  x     55 N SBS         0.00000        67.23387        -1.0             1.0            -6.44570    157
-      56  x     56 N  FR         0.00000       183.65763        -1.0             1.0           183.64921    158
-      57  x     57 N SBS         0.00000       116.94900        -1.0             1.0            46.73919    159
-      58  x     58 N SBS         0.00000       149.49980        -1.0             1.0            72.14162    160
-      59  x     59 N  FR         0.00000       176.56029        -1.0             1.0           202.99049    161
-      60  x     60 N  FR         0.00000       227.75635        -1.0             1.0           160.00579    162
-      61  x     61 N  FR         0.00000       212.53246        -1.0             1.0           134.02945    163
-      62  x     62 N  FR         0.00000        60.57302        -1.0             1.0           119.09830    164
-      63  x     63 N  FR         0.00000       387.92936        -1.0             1.0           328.78426    165
-      64  x     64 N  FR         0.00000       187.14461        -1.0             1.0           111.86101    166
-      65  x     65 N SBS         0.00000      -164.99019        -1.0             1.0           -70.44454    167
-      66  x     66 N  FR         0.00000       572.18539        -1.0             1.0           532.64901    168
-      67  x     67 N SBS         0.00000        19.99467        -1.0             1.0           -47.89353    169
-      68  x     68 N  FR         0.00000      -419.73372        -1.0             1.0          -294.91556    170
-      69  x     69 N  FR         0.00000       702.44903        -1.0             1.0           701.34364    171
-      70  x     70 N  FR         0.00000      -230.76148        -1.0             1.0          -300.09994    172
-      71  x     71 N  FR        -0.00000      -527.72078        -1.0             1.0          -400.52724    173
-      72  x     72 N  FR         0.00000       653.59825        -1.0             1.0           716.67628    174
-      73  x     73 N  FR         0.00000      -303.91893        -1.0             1.0          -421.65115    175
-      74  x     74 N  FR        -0.00000      -359.22809        -1.0             1.0          -276.36097    176
-      75  x     75 N  FR         0.00000       351.79289        -1.0             1.0           494.79924    177
-      76  x     76 N  FR         0.00000        52.17769        -1.0             1.0          -192.85810    178
-      77  x     77 N SBS        -0.00000      -118.71833        -1.0             1.0           -95.21358    179
-      78  x     78 N SBS         0.00000       -96.14813        -1.0             1.0            98.92604    180
-      79  x     79 N  FR         0.00000       572.18298        -1.0             1.0           187.97892    181
-      80  x     80 N  FR        -0.00000      -264.56789        -1.0             1.0          -235.07033    182
-      81  x     81 N  FR         0.00000      -513.27531        -1.0             1.0          -344.59776    183
-      82  x     82 N SBS         0.00000       446.21351        -1.0             1.0            94.53289    184
-      83  x     83 N  FR        -0.00000      -816.38344        -1.0             1.0          -712.36888    185
-      84  x     84 N  FR         0.00000      -907.08218        -1.0             1.0          -838.67973    186
-      85  x     85 N  FR        -0.00000      -243.71236        -1.0             1.0          -314.64102    187
-      86  x     86 N  FR        -0.00000      -748.00083        -1.0             1.0          -661.82982    188
-      87  x     87 N  FR         0.00000     -1082.22657        -1.0             1.0         -1107.48325    189
-      88  x     88 N SBS        -0.00000        24.86210        -1.0             1.0            94.60890    190
-      89  x     89 N SBS        -0.00000        46.20873        -1.0             1.0            37.45003    191
-      90  x     90 N  FR         0.00000       158.83605        -1.0             1.0           108.04111    192
-      91  x     91 N  FR        -0.00000      -263.83908        -1.0             1.0          -233.16544    193
-      92  x     92    BS        -0.00000       -33.20580        -1.0             1.0            43.05351    194
-      93  x     93 N  FR         0.00000      1403.77424        -1.0             1.0          1436.74692    195
-      94  x     94 N SBS         0.02857         0.04931        -1.0             1.0            15.21184    196
-      95  x     95 N SBS        -0.14785        -0.22637        -1.0             1.0            24.03852    197
-      96  x     96 N  FR         0.63189         0.98850        -1.0             1.0           -91.56057    198
-      97  x     97 N SBS         0.00000        17.72569        -1.0             1.0             7.59068    199
-      98  x     98 N SBS        -0.00000         3.72314        -1.0             1.0             5.62965    200
-      99  x     99 N SBS         0.00000         2.55886        -1.0             1.0           -67.19913    201
-     100  x    100 N SBS         0.00000        10.79340        -1.0             1.0            -3.52682    202
-     101  x    101 N SBS        -0.00000         0.96331        -1.0             1.0             2.92835    203
-     102  x    102    BS         0.00000        -3.34853        -1.0             1.0           -54.23197    204
-     103  x    103 N SBS         0.00000         4.18990        -1.0             1.0            -8.28830    205
-     104  x    104 N SBS        -0.00000        -0.27522        -1.0             1.0             5.00363    206
-     105  x    105 N SBS         0.00000        -2.38374        -1.0             1.0           -39.26619    207
-     106  x    106 N SBS         0.00000         1.40557        -1.0             1.0            -6.61401    208
-     107  x    107 N SBS        -0.00000        -0.53487        -1.0             1.0             8.30696    209
-     108  x    108 N SBS         0.00000        -0.58381        -1.0             1.0           -25.86545    210
-     109  x    109 N SBS         0.00000         0.68177        -1.0             1.0            -1.39271    211
-     110  x    110 N SBS        -0.00000        -0.62437        -1.0             1.0            10.80897    212
-     111  x    111 N SBS         0.00000         0.34753        -1.0             1.0           -14.34627    213
-     112  x    112 N SBS         0.00000         0.63831        -1.0             1.0             5.30293    214
-     113  x    113 N SBS        -0.00000        -0.71864        -1.0             1.0            11.66033    215
-     114  x    114 N SBS         0.00000         0.45921        -1.0             1.0            -4.07513    216
-     115  x    115 N SBS         0.00000         0.62642        -1.0             1.0            12.18504    217
-     116  x    116    BS        -0.00000        -0.78076        -1.0             1.0            10.63461    218
-     117  x    117 N SBS        -0.00000         0.15471        -1.0             1.0             5.61782    219
-     118  x    118    BS         0.28670         0.52312        -1.0             1.0            18.53063    220
-     119  x    119 N SBS        -0.41945        -0.80600        -1.0             1.0             7.79726    221
-     120  x    120 N SBS        -0.09553        -0.13935        -1.0             1.0            15.39791    222
-     121  x    121    BS         0.86638         0.05723       -10.00000        10.00000        -1.24591    223
-     122  x    122    BS         0.00941        -0.02131       -10.00000        10.00000       -27.38460    224
-     123  x    123    BS         0.18721        -0.10563       -10.00000        10.00000         1.95738    225
-     124  x    124    BS         0.01120         0.09966       -10.00000        10.00000       -32.61735    226
-     125  x    125    BS         0.24525        -0.08652       -10.00000        10.00000         4.01270    227
-     126  x    126    BS        -0.01760         0.04346       -10.00000        10.00000        51.27833    228
-     127  x    127 D  BS         1.0             0.04205         0.10000         1.0             0.00000    229
-     128  x    128    BS         1.01739        -0.54329       -10.00000        10.00000         0.16264    230
-     129  x    129    BS        -0.02031        -0.15962       -10.00000        10.00000         0.54092    231
-     130  x    130    BS        -0.16932         1.09642       -10.00000        10.00000        -0.66718    232
-     131  x    131    BS        -0.02684         0.31793       -10.00000        10.00000         0.75907    233
-     132  x    132    BS        -0.08926        -0.07537       -10.00000        10.00000        -0.59765    234
-     133  x    133    BS         0.11009        -0.48422       -10.00000        10.00000        -3.29685    235
-     134  x    134    BS         0.98878         0.00182         0.10000         1.0             0.00016    236
-     135  x    135   SBS         0.10000         0.00770         0.00001         1.0             0.00382    237
-     136  x    136   SBS         0.10000         0.00785         0.00001         1.0             0.00416    238
-     137  x    137 N  FR         0.01658          .               .              0.50000      -371.68718    239
-     138  x    138    BS         0.14218          .               .              0.50000        -4.07392    240
+       1  x      1 N SBS        -0.21215        -0.20293        -1.0             1.0            40.61265    103
+       2  x      2    BS         0.97411         0.96387        -1.0             1.0            13.36368    104
+       3  x      3    BS        -0.07814        -0.07328        -1.0             1.0            43.03231    105
+       4  x      4 N SBS        -0.07231        -0.15504        -1.0             1.0            43.08290    106
+       5  x      5    BS         0.43709         0.96404        -1.0             1.0           -19.23469    107
+       6  x      6 N SBS        -0.06592        -0.14103        -1.0             1.0            41.37246    108
+       7  x      7 N SBS        -0.00000        -5.48645        -1.0             1.0            34.07930    109
+       8  x      8    BS         0.00000        14.81098        -1.0             1.0           -10.40820    110
+       9  x      9 N SBS        -0.00000        -4.92820        -1.0             1.0            31.64591    111
+      10  x     10 N SBS        -0.00000       -27.78281        -1.0             1.0             9.29270    112
+      11  x     11    BS         0.00000        52.23923        -1.0             1.0            20.86524    113
+      12  x     12 N SBS        -0.00000       -19.73416        -1.0             1.0            11.66583    114
+      13  x     13    BS        -0.00000       -83.26912        -1.0             1.0           -49.05088    115
+      14  x     14    BS         0.00000       100.75661        -1.0             1.0            64.86988    116
+      15  x     15 N SBS        -0.00000       -37.09524        -1.0             1.0           -12.66674    117
+      16  x     16 N  FR        -0.00000      -175.71265        -1.0             1.0          -144.45896    118
+      17  x     17 N SBS         0.00000       131.22233        -1.0             1.0            91.59791    119
+      18  x     18 N SBS        -0.00000       -32.76023        -1.0             1.0           -16.82843    120
+      19  x     19 N  FR        -0.00000      -261.52754        -1.0             1.0          -233.51251    121
+      20  x     20 N SBS         0.00000       117.39704        -1.0             1.0            73.87395    122
+      21  x     21 N SBS        -0.00000         9.70380        -1.0             1.0            16.18246    123
+      22  x     22 N  FR        -0.00000      -265.16404        -1.0             1.0          -240.88546    124
+      23  x     23    BS         0.00000        67.61514        -1.0             1.0            19.73686    125
+      24  x     24 N SBS        -0.00000        58.27590        -1.0             1.0            54.97578    126
+      25  x     25 N  FR        -0.00000      -180.49350        -1.0             1.0          -160.87650    127
+      26  x     26 N SBS         0.00000        23.73565        -1.0             1.0           -28.97221    128
+      27  x     27 N SBS        -0.00000        64.02703        -1.0             1.0            51.18118    129
+      28  x     28 N SBS        -0.00000       -85.83043        -1.0             1.0           -72.46523    130
+      29  x     29 N SBS         0.00000         7.11026        -1.0             1.0           -50.56045    131
+      30  x     30 N SBS        -0.00000        36.87144        -1.0             1.0            15.22370    132
+      31  x     31 N SBS        -0.00000       -30.60605        -1.0             1.0           -25.58205    133
+      32  x     32 N SBS         0.00000         4.41496        -1.0             1.0           -57.50024    134
+      33  x     33 N SBS        -0.00000        13.67626        -1.0             1.0           -15.55713    135
+      34  x     34 N SBS        -0.00000        -7.81546        -1.0             1.0           -13.11549    136
+      35  x     35 N SBS         0.00000         2.96635        -1.0             1.0           -61.19538    137
+      36  x     36 N SBS        -0.00000         3.47076        -1.0             1.0           -31.91380    138
+      37  x     37 N SBS        -0.00000        -0.80164        -1.0             1.0           -17.54731    139
+      38  x     38    BS         0.00001         1.35073        -1.0             1.0           -61.86018    140
+      39  x     39 N SBS         0.00000         0.40164        -1.0             1.0           -39.82990    141
+      40  x     40 N SBS         0.05876         0.07456        -1.0             1.0           -27.87949    142
+      41  x     41 N  FR         0.78285         0.99831        -1.0             1.0           -57.63620    143
+      42  x     42 N SBS         0.02639         0.03469        -1.0             1.0           -44.08180    144
+      43  x     43 N SBS         0.00000        -1.06839        -1.0             1.0           -38.77877    145
+      44  x     44 N SBS         0.00001         2.45265        -1.0             1.0           -48.39106    146
+      45  x     45 N SBS         0.00000         0.79204        -1.0             1.0           -46.45504    147
+      46  x     46 N SBS         0.00000        -6.38765        -1.0             1.0           -52.07008    148
+      47  x     47    BS         0.00000        12.67733        -1.0             1.0           -27.38347    149
+      48  x     48 N SBS         0.00000         5.44270        -1.0             1.0           -44.40933    150
+      49  x     49 N SBS         0.00000       -13.06672        -1.0             1.0           -65.04211    151
+      50  x     50    BS         0.00000        40.25253        -1.0             1.0            14.20527    152
+      51  x     51 N SBS         0.00000        18.37912        -1.0             1.0           -33.38950    153
+      52  x     52 N SBS         0.00000       -10.23405        -1.0             1.0           -66.98664    154
+      53  x     53 N SBS         0.00000        87.08781        -1.0             1.0            78.96881    155
+      54  x     54 N SBS         0.00000        46.04884        -1.0             1.0            -6.13476    156
+      55  x     55 N SBS         0.00000        19.77668        -1.0             1.0           -40.30229    157
+      56  x     56 N  FR         0.00000       137.98344        -1.0             1.0           152.74277    158
+      57  x     57 N SBS         0.00000        98.86623        -1.0             1.0            49.44886    159
+      58  x     58 N SBS         0.00000        94.18395        -1.0             1.0            32.52466    160
+      59  x     59 N  FR         0.00000       144.61262        -1.0             1.0           188.16861    161
+      60  x     60 N  FR         0.00000       192.07075        -1.0             1.0           151.65781    162
+      61  x     61 N  FR         0.00000       200.56306        -1.0             1.0           139.89647    163
+      62  x     62 N SBS         0.00000         9.78628        -1.0             1.0            87.52481    164
+      63  x     63 N  FR         0.00000       332.22723        -1.0             1.0           312.36204    165
+      64  x     64 N  FR         0.00000       201.56728        -1.0             1.0           144.81320    166
+      65  x     65 N  FR         0.00000      -268.24593        -1.0             1.0          -156.69805    167
+      66  x     66 N  FR         0.00000       448.19899        -1.0             1.0           468.96471    168
+      67  x     67 N SBS         0.00000        41.47310        -1.0             1.0           -14.40496    169
+      68  x     68 N  FR         0.00000      -448.03696        -1.0             1.0          -320.12805    170
+      69  x     69 N  FR         0.00000       477.32639        -1.0             1.0           569.21485    171
+      70  x     70 N  FR         0.00000      -118.19733        -1.0             1.0          -202.13526    172
+      71  x     71 N  FR        -0.00000      -404.56657        -1.0             1.0          -305.13250    173
+      72  x     72 N  FR         0.00000       329.39124        -1.0             1.0           524.43836    174
+      73  x     73 N  FR         0.00000        -5.59621        -1.0             1.0          -192.31660    175
+      74  x     74 N  FR        -0.00000      -146.12258        -1.0             1.0          -123.72424    176
+      75  x     75 N  FR         0.00000       -10.33864        -1.0             1.0           286.85837    177
+      76  x     76    BS         0.00000       441.04138        -1.0             1.0            82.80861    178
+      77  x     77 N SBS        -0.00000       -33.75146        -1.0             1.0           -65.86884    179
+      78  x     78 N SBS         0.00000      -389.75231        -1.0             1.0           -64.41893    180
+      79  x     79 N  FR         0.00000       686.46200        -1.0             1.0           235.39808    181
+      80  x     80 N  FR        -0.00000      -414.86399        -1.0             1.0          -396.41518    182
+      81  x     81 N  FR         0.00000      -684.43935        -1.0             1.0          -447.13629    183
+      82  x     82 N SBS         0.00000       215.70665        -1.0             1.0           -78.75809    184
+      83  x     83 N  FR        -0.00000      -874.07258        -1.0             1.0          -769.80206    185
+      84  x     84 N  FR         0.00000      -943.61703        -1.0             1.0          -851.43875    186
+      85  x     85 N  FR        -0.00000      -264.90367        -1.0             1.0          -253.11890    187
+      86  x     86 N  FR        -0.00000      -671.81643        -1.0             1.0          -616.87816    188
+      87  x     87 N  FR         0.00000     -1004.40894        -1.0             1.0         -1011.81358    189
+      88  x     88 N  FR        -0.00000        42.49060        -1.0             1.0           114.50405    190
+      89  x     89 N SBS        -0.00000        65.17423        -1.0             1.0            66.94830    191
+      90  x     90 N  FR         0.00000       227.78633        -1.0             1.0           197.13827    192
+      91  x     91 N  FR        -0.00000      -266.10976        -1.0             1.0          -219.81777    193
+      92  x     92 N SBS        -0.00000       -37.91604        -1.0             1.0            63.57330    194
+      93  x     93 N  FR         0.00000      1403.43866        -1.0             1.0          1492.08719    195
+      94  x     94 N SBS         0.02857         0.04573        -1.0             1.0            23.38998    196
+      95  x     95 N SBS        -0.14785        -0.22767        -1.0             1.0            35.13611    197
+      96  x     96 N  FR         0.63189         0.98470        -1.0             1.0          -103.14091    198
+      97  x     97 N SBS         0.00000        14.85388        -1.0             1.0             9.29950    199
+      98  x     98 N SBS        -0.00000         3.37945        -1.0             1.0            11.83716    200
+      99  x     99 N SBS         0.00000         2.19467        -1.0             1.0           -73.56398    201
+     100  x    100 N SBS         0.00000         7.77121        -1.0             1.0            -2.57931    202
+     101  x    101 N SBS        -0.00000         0.96280        -1.0             1.0             8.21624    203
+     102  x    102    BS         0.00000        -2.29785        -1.0             1.0           -56.79290    204
+     103  x    103 N SBS         0.00000         2.49467        -1.0             1.0            -6.32599    205
+     104  x    104 N SBS        -0.00000        -0.09913        -1.0             1.0             9.54467    206
+     105  x    105 N SBS         0.00000        -1.03696        -1.0             1.0           -40.05565    207
+     106  x    106 N SBS         0.00000         0.78335        -1.0             1.0            -3.88003    208
+     107  x    107 N SBS        -0.00000        -0.45634        -1.0             1.0            11.83027    209
+     108  x    108 N SBS         0.00000         0.33933        -1.0             1.0           -25.92597    210
+     109  x    109 N SBS         0.00000         0.55520        -1.0             1.0             1.40505    211
+     110  x    110 N SBS        -0.00000        -0.68633        -1.0             1.0            13.20217    212
+     111  x    111 N SBS         0.00000         0.77135        -1.0             1.0           -13.92354    213
+     112  x    112 N SBS         0.00000         0.63395        -1.0             1.0             7.57425    214
+     113  x    113    BS        -0.00000        -0.83716        -1.0             1.0            13.01053    215
+     114  x    114 N SBS         0.00000         0.57550        -1.0             1.0            -3.08889    216
+     115  x    115 N SBS         0.00000         0.60926        -1.0             1.0            13.55067    217
+     116  x    116 N SBS        -0.00000        -0.84770        -1.0             1.0            11.16632    218
+     117  x    117 N SBS        -0.00000         0.16879        -1.0             1.0             7.31909    219
+     118  x    118    BS         0.28670         0.48316        -1.0             1.0            18.76039    220
+     119  x    119 N SBS        -0.41945        -0.79422        -1.0             1.0             7.75712    221
+     120  x    120 N SBS        -0.09553        -0.11018        -1.0             1.0            17.95011    222
+     121  x    121    BS         0.86638         0.05279       -10.00000        10.00000        -1.24591    223
+     122  x    122    BS         0.00941        -0.02332       -10.00000        10.00000       -27.38460    224
+     123  x    123    BS         0.18721        -0.11353       -10.00000        10.00000         1.95738    225
+     124  x    124    BS         0.01120         0.10218       -10.00000        10.00000       -32.61735    226
+     125  x    125    BS         0.24525        -0.09285       -10.00000        10.00000         4.01270    227
+     126  x    126    BS        -0.01760         0.04002       -10.00000        10.00000        51.27833    228
+     127  x    127 D  BS         1.0             0.04477         0.10000         1.0            -0.00000    229
+     128  x    128    BS         1.01739        -1.17528       -10.00000        10.00000         0.22298    230
+     129  x    129    BS        -0.02031        -0.45662       -10.00000        10.00000         0.74158    231
+     130  x    130    BS        -0.16932         1.93859       -10.00000        10.00000        -0.91468    232
+     131  x    131    BS        -0.02684         0.71427       -10.00000        10.00000         1.04065    233
+     132  x    132    BS        -0.08926        -0.21309       -10.00000        10.00000        -0.81936    234
+     133  x    133    BS         0.11009        -0.80269       -10.00000        10.00000        -4.51987    235
+     134  x    134    BS         0.98878         0.01784         0.10000         1.0             0.00016    236
+     135  x    135 A  FR         0.01000          .              0.00001           None           .         237
+     136  x    136 A  FR         0.01000          .              0.00001           None           .         238
+     137  x    137 A  FR         0.01000        -0.00000         0.00001           None          0.00005    239
+     138  x    138   SBS         0.01000        -0.00008         0.00001           None          0.00666    240
+     139  x    139 A  FR         0.01000        -0.00000         0.00001           None          0.00024    241
+     140  x    140   SBS         0.01000        -0.00014         0.00001           None          0.00370    242
+     141  x    141 A  FR         0.01000        -0.00001         0.00001           None          0.00045    243
+     142  x    142   SBS         0.01000        -0.00017         0.00001           None          0.00191    244
+     143  x    143 A  FR         0.01000        -0.00003         0.00001           None          0.00061    245
+     144  x    144   SBS         0.01000        -0.00018         0.00001           None          0.00121    246
+     145  x    145 A  FR         0.01000        -0.00005         0.00001           None          0.00072    247
+     146  x    146   SBS         0.01000        -0.00017         0.00001           None          0.00109    248
+     147  x    147 A  FR         0.01000        -0.00007         0.00001           None          0.00078    249
+     148  x    148   SBS         0.01000        -0.00017         0.00001           None          0.00120    250
+     149  x    149 A  FR         0.01000        -0.00009         0.00001           None          0.00084    251
+     150  x    150   SBS         0.01000        -0.00016         0.00001           None          0.00122    252
+     151  x    151 A  FR         0.01000        -0.00012         0.00001           None          0.00091    253
+     152  x    152   SBS         0.01000        -0.00016         0.00001           None          0.00103    254
+     153  x    153   SBS         0.01000        -0.00015         0.00001           None          0.00100    255
+     154  x    154 A  FR         0.01000        -0.00014         0.00001           None          0.00070    256
+     155  x    155   SBS         0.01000        -0.00018         0.00001           None          0.00109    257
+     156  x    156 A  FR         0.01000        -0.00012         0.00001           None          0.00037    258
+     157  x    157   SBS         0.01000        -0.00020         0.00001           None          0.00116    259
+     158  x    158 A  FR         0.01000        -0.00008         0.00001           None          0.00021    260
+     159  x    159   SBS         0.01000        -0.00021         0.00001           None          0.00118    261
+     160  x    160 A  FR         0.01000        -0.00005         0.00001           None          0.00026    262
+     161  x    161   SBS         0.01000        -0.00021         0.00001           None          0.00114    263
+     162  x    162 A  FR         0.01000        -0.00002         0.00001           None          0.00044    264
+     163  x    163   SBS         0.01000        -0.00020         0.00001           None          0.00106    265
+     164  x    164 A  FR         0.01000        -0.00000         0.00001           None          0.00063    266
+     165  x    165   SBS         0.01000        -0.00018         0.00001           None          0.00096    267
+     166  x    166 A  FR         0.01000         0.00000         0.00001           None          0.00078    268
+     167  x    167 A  FR         0.01000        -0.00015         0.00001           None          0.00084    269
+     168  x    168 A  FR         0.01000        -0.00001         0.00001           None          0.00086    270
+     169  x    169 A  FR         0.01000        -0.00011         0.00001           None          0.00072    271
+     170  x    170 A  FR         0.01000        -0.00002         0.00001           None          0.00088    272
+     171  x    171 A  FR         0.01000        -0.00007         0.00001           None          0.00061    273
+     172  x    172 A  FR         0.01000        -0.00004         0.00001           None          0.00085    274
+     173  x    173 A  FR         0.01000        -0.00002         0.00001           None          0.00052    275
+     174  x    174 A  FR         0.01000        -0.00007         0.00001           None          0.00079    276
+     175  x    175 A  FR         0.01000         0.00002         0.00001           None          0.00044    277
+     176  x    176 A  FR         0.01000        -0.00009         0.00001           None          0.00070    278
+     177  x    177 A  FR         0.01000         0.00006         0.00001           None          0.00037    279
+     178  x    178 A  FR         0.01000        -0.00012         0.00001           None          0.00060    280
+     179  x    179 A  FR         0.01000         0.00010         0.00001           None          0.00031    281
+     180  x    180 A  FR         0.01000        -0.00011         0.00001           None          0.00052    282
+     181  x    181 A  FR         0.01000         0.00013         0.00001           None          0.00026    283
+     182  x    182 A  FR         0.01000        -0.00004         0.00001           None          0.00050    284
+     183  x    183 A  FR         0.01000         0.00014         0.00001           None          0.00022    285
+     184  x    184 A  FR         0.01000         0.00002         0.00001           None          0.00049    286
+     185  x    185 A  FR         0.01000         0.00015         0.00001           None          0.00018    287
+     186  x    186 A  FR         0.01000         0.00008         0.00001           None          0.00047    288
+     187  x    187 A  FR         0.01000         0.00015         0.00001           None          0.00015    289
+     188  x    188 A  FR         0.01000         0.00012         0.00001           None          0.00045    290
+     189  x    189 A  FR         0.01000         0.00016         0.00001           None          0.00014    291
+     190  x    190 A  FR         0.01000         0.00016         0.00001           None          0.00044    292
+     191  x    191 A  FR         0.01000         0.00017         0.00001           None          0.00014    293
+     192  x    192 A  FR         0.01000         0.00024         0.00001           None          0.00048    294
+     193  x    193 A  FR         0.01000         0.00020         0.00001           None          0.00018    295
+     194  x    194 A  FR         0.01000         0.00062         0.00001           None          0.00079    296
+     195  x    195 A  FR         0.01000         0.00030         0.00001           None          0.00031    297
+     196  x    196   SBS         0.01000         0.00604         0.00001           None          0.00600    298
+     197  x    197 A  FR         0.01000         0.00064         0.00001           None          0.00060    299
+     198  x    198 N SBS         0.01000         0.22276         0.00001           None          0.19653    300
+     199  x    199 A  FR         0.01000         0.00029         0.00001           None          0.00017    301
+     200  x    200   SBS         0.01000         0.00535         0.00001           None          0.00239    302
+     201  x    201 A  FR         0.01000         0.00028         0.00001           None          0.00008    303
+     202  x    202 A  FR         0.01000         0.00153         0.00001           None          0.00049    304
+     203  x    203 A  FR         0.01000         0.00030         0.00001           None          0.00004    305
+     204  x    204 A  FR         0.01000         0.00082         0.00001           None          0.00036    306
+     205  x    205 A  FR         0.01000         0.00032         0.00001           None          0.00001    307
+     206  x    206 A  FR         0.01000         0.00057         0.00001           None          0.00037    308
+     207  x    207 A  FR         0.01000         0.00033         0.00001           None         -0.00001    309
+     208  x    208 A  FR         0.01000         0.00047         0.00001           None          0.00041    310
+     209  x    209 A  FR         0.01000         0.00034         0.00001           None         -0.00003    311
+     210  x    210 A  FR         0.01000         0.00045         0.00001           None          0.00045    312
+     211  x    211 A  FR         0.01000         0.00035         0.00001           None         -0.00003    313
+     212  x    212 A  FR         0.01000         0.00050         0.00001           None          0.00050    314
+     213  x    213   SBS         0.01000         0.39562         0.00001           None          0.00411    315
+     214  x    214 N SBS         0.01000         0.91004         0.00001           None          0.74035    316
+     215  x    215 N  FR         0.01658          .               .              0.50000      -171.06779    317
+     216  x    216    BS         0.14218          .               .              0.50000        -5.58520    318
  
  Time for MPS input                             0.00 seconds
- Time for solving problem                      14.16 seconds
+ Time for solving problem                      12.31 seconds
  Time for solution output                       0.00 seconds
- Time for constraint functions                 14.15 seconds
+ Time for constraint functions                 12.30 seconds
  Time for objective function                    0.00 seconds

@@ -45,7 +45,7 @@ if __name__ == "__main__":
     Gain_Parametrization_Type = "fulltraj_lqr"
     Feedback_Control_Type = "true_state"
 
-    hot_start = False
+    hot_start = True
     hot_start_sol = "deterministic"
     # ---------------------------------------------------------------------------
     file_name = Problem_Type
@@ -67,7 +67,7 @@ if __name__ == "__main__":
                   'Function precision': 1e-12,
                   'Verify level': -1,
                   'Nonderivative linesearch': 0,
-                  'Elastic weight': 1.e10}
+                  'Elastic weight': 1.e8}
     # ---------------------------------------------------------------------------
 
 
@@ -94,7 +94,7 @@ if __name__ == "__main__":
         if Gain_Parametrization_Type.lower() == 'arc_lqr':
             init_guess['gain_weights'] = 1e-4*jnp.ones(2*cfg_args.N_arcs)
         elif Gain_Parametrization_Type.lower() == 'fulltraj_lqr':
-            init_guess['gain_weights'] = 1e-1*jnp.ones(2)
+            init_guess['gain_weights'] = 1e-2*jnp.ones(2*cfg_args.N_arcs)
     if hot_start:
         sol_hot = load_OptimizerSol(hot_start_file)
         for key in sol_hot.keys():
@@ -116,8 +116,8 @@ if __name__ == "__main__":
         if Gain_Parametrization_Type.lower() == 'arc_lqr':
             gain_weight_ln = 2*cfg_args.N_arcs
         elif Gain_Parametrization_Type.lower() == 'fulltraj_lqr':
-            gain_weight_ln = 2
-        optprop.addVarGroup('gain_weights', gain_weight_ln, "c", value = init_guess['gain_weights'], lower = 1e-5, upper = 1)
+            gain_weight_ln = 2*cfg_args.N_arcs
+        optprop.addVarGroup('gain_weights', gain_weight_ln, "c", value = init_guess['gain_weights'], lower = 1e-5)
     if cfg_args.free_phasing:
         optprop.addVarGroup('alpha', 1, "c", value = init_guess['alpha'], lower = Boundary_Conds['alpha_min'], upper = Boundary_Conds['alpha_max'])
         optprop.addVarGroup('beta', 1, "c", value = init_guess['beta'], lower = Boundary_Conds['beta_min'], upper = Boundary_Conds['beta_max'])
