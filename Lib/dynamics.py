@@ -298,7 +298,13 @@ def GainParameterizers(Gain_Type):
             # Set temporary variables
             A_i = A_arc_hst[i,:,:]
             B_i = B_arc_hst[i,:,:]
-            Q_i = jnp.diag(jnp.array([jnp.ones(3,)*xi_r[i], jnp.ones(3,)*xi_v[i]]).flatten())
+
+            B_1i_r = B_arc_hst[i,:3,:]
+            B_1i_v = B_arc_hst[i,3:6,:]
+
+            blk_r = xi_r[i]*jnp.linalg.inv(B_1i_r.T @ B_1i_r)
+            blk_v = xi_v[i]*jnp.linalg.inv(B_1i_v.T @ B_1i_v)
+            Q_i = jax.scipy.linalg.block_diag(blk_r, blk_v)
 
             # Iterate and compute K_i and S_i
             M_i = R_i + B_i.T @ S_i1 @ B_i
@@ -307,7 +313,9 @@ def GainParameterizers(Gain_Type):
             K_i = - tmp_mat @ A_i
             K_arc_hst = K_arc_hst.at[i,:,0:6].set(K_i)
 
-            S_i = A_i.T @ (S_i1 - S_i1 @ B_i @ tmp_mat) @ A_i + Q_i
+            Q_i_mod = Q_i
+
+            S_i = A_i.T @ (S_i1 - S_i1 @ B_i @ tmp_mat) @ A_i + Q_i_mod 
 
             output_dict = {'index_back': index_back, 'A_arc_hst': A_arc_hst, 'B_arc_hst': B_arc_hst,
                            'xi_r': xi_r, 'xi_v': xi_v, 'K_arc_hst': K_arc_hst,'R_i': R_i, 'S_i1': S_i}
@@ -318,22 +326,17 @@ def GainParameterizers(Gain_Type):
             N_arcs = A_arc_hst.shape[0]
             xi_r = xi[:,0]
             xi_v = xi[:,1]
-
-            #xi_r_mod = 0.9+0.1*xi_r
-            #xi_v_mod = 0.9+0.1*xi_v
-
-            #rho = (xi_r_mod + xi_v_mod)/2
-            #R_i = (1-rho)*jnp.eye(3)
-
-            #xi_r_mod = jnp.exp(xi_r)
-            #xi_v_mod = jnp.exp(xi_v)
-            xi_r_mod = xi_r*1e3
-            xi_v_mod = xi_v*1e3
+            
             R_i = jnp.eye(3)
 
             index_back = jnp.arange(N_arcs-1, -1, -1)
 
-            Q_f = jnp.diag(jnp.array([jnp.ones(3,)*xi_r_mod[-1], jnp.ones(3,)*xi_v_mod[-1]]).flatten())
+            B_1N_r = B_arc_hst[-1,:3,:]
+            B_1N_v = B_arc_hst[-1,3:6,:]
+
+            blk_r = xi_r[-1]*jnp.linalg.inv(B_1N_r.T @ B_1N_r)
+            blk_v = xi_v[-1]*jnp.linalg.inv(B_1N_v.T @ B_1N_v)
+            Q_N = jax.scipy.linalg.block_diag(blk_r, blk_v)
 
             A_rv_arc_hst = A_arc_hst[:,:6,:6]
             B_rv_arc_hst = B_arc_hst[:,:6,:]
@@ -341,7 +344,7 @@ def GainParameterizers(Gain_Type):
             K_arc_hst = jnp.zeros((N_arcs, 3, 7))
 
             init_input = {'index_back': index_back, 'A_arc_hst': A_rv_arc_hst, 'B_arc_hst': B_rv_arc_hst,
-                          'xi_r': xi_r, 'xi_v': xi_v, 'K_arc_hst': K_arc_hst, 'R_i': R_i, 'S_i1': Q_f, }
+                          'xi_r': xi_r, 'xi_v': xi_v, 'K_arc_hst': K_arc_hst, 'R_i': R_i, 'S_i1': Q_N}
             
             final_output = jax.lax.fori_loop(0, N_arcs, iterate_K, init_input)
             K_arc_hst = final_output['K_arc_hst']
@@ -752,7 +755,7 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, mo
         if cfg_args.gain_param_type.lower() == 'arc_lqr':
             gain_weights = inputs['gain_weights'].reshape(N_arcs,2)
         elif cfg_args.gain_param_type.lower() == 'fulltraj_lqr':
-            gain_weights = inputs['gain_weights'].reshape(N_arcs,2)
+            gain_weights = inputs['gain_weights'].reshape(N_arcs+1,2)
     if cfg_args.free_phasing:
         alpha = inputs['alpha']
         beta = inputs['beta']
@@ -942,7 +945,7 @@ def sim_Det_traj(sol, Sys, propagators, models, dyn_args, cfg_args):
         if cfg_args.gain_param_type.lower() == 'arc_lqr':
             gain_weights = sol.xStar['gain_weights'].reshape(cfg_args.N_arcs, 2)
         elif cfg_args.gain_param_type.lower() == 'fulltraj_lqr':
-            gain_weights = sol.xStar['gain_weights'].reshape(cfg_args.N_arcs, 2)
+            gain_weights = sol.xStar['gain_weights'].reshape(cfg_args.N_arcs+1, 2)
 
     # Unpack propagators
     propagator_e = propagators['propagator_e']
@@ -962,7 +965,7 @@ def sim_Det_traj(sol, Sys, propagators, models, dyn_args, cfg_args):
     U_hst = jnp.zeros((length, 3))
     t_hst = jnp.zeros((length,))
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
-        gain_weight_hst = jnp.zeros((length, 2))
+        gain_weights_hst = jnp.zeros((length, 2))
         K_arc_hst = jnp.zeros((cfg_args.N_arcs, 3, 7))
         TCM_norm_bound_hst = jnp.zeros((length,))
         TCM_norm_dV_hst = jnp.zeros((length,))
@@ -1048,7 +1051,7 @@ def sim_Det_traj(sol, Sys, propagators, models, dyn_args, cfg_args):
             P0_arc = P_hst[arc_i_0,:,:]
             P_u_arc = K_arc @ P0_arc @ K_arc.T  
 
-            #xi_hst = xi_hst.at[arc_i_0:arc_i_f,:].set(jnp.tile(xi_arc, (arc_length-1,1)))
+            gain_weights_hst = gain_weights_hst.at[arc_i_0:arc_i_f,:].set(jnp.tile(gain_weights[k,:], (arc_length-1,1)))
             K_hst = K_hst.at[arc_i_0:arc_i_f,:,:].set(jnp.tile(K_arc, (arc_length-1,1,1)))
             P_u_hst = P_u_hst.at[arc_i_0:arc_i_f,:,:].set(jnp.tile(P_u_arc, (arc_length-1,1,1)))
 
@@ -1103,7 +1106,7 @@ def sim_Det_traj(sol, Sys, propagators, models, dyn_args, cfg_args):
                         'K_arc': jnp.zeros((3,7)), 'G_stoch_arc': jnp.zeros((3,3)), 'G_exe_arc': jnp.zeros((3,3)),
                         'P_js': P_hst[post_insert_i0:,:,:]}
         if cfg_args.feedback_type.lower() == 'true_state':
-            cov_input_dict['tau_j'] = P0_arc
+            cov_input_dict['tau_j'] = P_hst[post_insert_i0,:,:]
             cov_input_dict['gam_j'] = jnp.zeros((7,3))
         elif cfg_args.feedback_type.lower() == 'estimated_state':
             # add in terms for navigational case later
@@ -1166,6 +1169,7 @@ def sim_Det_traj(sol, Sys, propagators, models, dyn_args, cfg_args):
         output_dict['A_hst'] = A_hst
         output_dict['B_hst'] = B_hst
         output_dict['K_hst'] = K_hst
+        output_dict['gain_weights_hst'] = gain_weights_hst
         output_dict['K_arc_hst'] = K_arc_hst
         output_dict['P_hst'] = P_hst
         output_dict['P_u_hst'] = P_u_hst

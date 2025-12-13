@@ -464,6 +464,7 @@ def save_sol(output, Sys, save_loc: str, dyn_args, cfg_args):
             f.create_dataset("Det_A_hst", data=output['Det']['A_hst'])
             f.create_dataset("Det_B_hst", data=output['Det']['B_hst'])
             f.create_dataset("Det_K_hst", data=output['Det']['K_hst'])
+            f.create_dataset("Det_gain_weights_hst", data=output['Det']['gain_weights_hst'])
             f.create_dataset("Det_P_hst", data=output['Det']['P_hst'])
             f.create_dataset("Det_P_Xf_targ", data=output['Det']['P_Xf_targ'])
             f.create_dataset("Det_P_XT_targ", data=output['Det']['P_XT_targ'])

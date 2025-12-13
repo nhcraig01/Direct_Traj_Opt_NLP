@@ -13,45 +13,39 @@
  
 
  Nonlinear constraints     102     Linear constraints       0
- Nonlinear variables       216     Linear variables         0
- Jacobian  variables       216     Objective variables    216
- Total constraints         102     Total variables        216
+ Nonlinear variables       218     Linear variables         0
+ Jacobian  variables       218     Objective variables    218
+ Total constraints         102     Total variables        218
  
 
  
- The user has defined   22032   out of   22032   constraint gradients.
- The user has defined     216   out of     216   objective  gradients.
+ The user has defined   22236   out of   22236   constraint gradients.
+ The user has defined     218   out of     218   objective  gradients.
  
 
  Major Minors     Step   nCon Feasible  Optimal  MeritFunction     nS Penalty
-     0    188               1  9.0E-01  1.5E+00  3.5829191E+00     97           r
-
- Major Minors     Step   nCon Feasible  Optimal  MeritFunction     nS Penalty
-     0      1               1  9.0E-01  1.5E+00  3.5829191E+00     97           r
-
- Major Minors     Step   nCon Feasible  Optimal  MeritFunction     nS Penalty
-     0      1               1  9.0E-01  1.5E+00  3.5829191E+00     97           r
+     0    139               1  1.9E-06  1.9E+00  3.7663849E+00     99           r  T
  
- SNOPTC EXIT  40 -- terminated after numerical difficulties
- SNOPTC INFO  41 -- current point cannot be improved
+ SNOPTC EXIT  30 -- resource limit error
+ SNOPTC INFO  32 -- major iteration limit reached
 
  Problem name                 Forward
- No. of iterations                 190   Objective            3.5829190873E+00
+ No. of iterations                 139   Objective            3.7663848959E+00
  No. of major iterations             0   Linear    obj. term  0.0000000000E+00
- Penalty parameter           0.000E+00   Nonlinear obj. term  3.5829190873E+00
- User function calls (total)        46   Calls with modes 1,2 (known g)      1
- No. of superbasics                 97   No. of basic nonlinears            30
- No. of degenerate steps             1   Percentage                       0.53
- Max x                     128 1.0E+00   Max pi                     10 9.3E+02
- Max Primal infeas         277 9.2E-01   Max Dual infeas            93 1.5E+03
- Nonlinear constraint violn    9.2E-01
+ Penalty parameter           0.000E+00   Nonlinear obj. term  3.7663848959E+00
+ User function calls (total)         1   Calls with modes 1,2 (known g)      1
+ No. of superbasics                 99   No. of basic nonlinears            23
+ No. of degenerate steps             3   Percentage                       2.16
+ Max x                     216 1.5E+00   Max pi                      2 1.4E+02
+ Max Primal infeas         238 3.0E-06   Max Dual infeas            23 2.8E+02
+ Nonlinear constraint violn    3.0E-06
  
  
 
  Solution printed on file  18
  
  Time for MPS input                             0.00 seconds
- Time for solving problem                      12.31 seconds
+ Time for solving problem                      12.85 seconds
  Time for solution output                       0.00 seconds
- Time for constraint functions                 12.30 seconds
+ Time for constraint functions                 12.85 seconds
  Time for objective function                    0.00 seconds

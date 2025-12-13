@@ -46,7 +46,7 @@ if __name__ == "__main__":
     Feedback_Control_Type = "true_state"
 
     hot_start = True
-    hot_start_sol = "deterministic"
+    hot_start_sol = "stochastic_gauss_zoh_true_state"
     # ---------------------------------------------------------------------------
     file_name = Problem_Type
     if Problem_Type.lower() == 'stochastic_gauss_zoh': 
@@ -60,14 +60,14 @@ if __name__ == "__main__":
     # SNOPT Options -------------------------------------------------------------
     optOptions = {'Major optimality tolerance': 1e-5,  # Pretty much always keep this at 1.e-5 (linesearch_tol is more important)
                   'Major feasibility tolerance': 1e-6,  
-                  'Minor feasibility tolerance': 1e-5,
-                  'Major iterations limit': 5000, 
+                  'Minor feasibility tolerance': 1e-6,
+                  'Major iterations limit': 0,
                   'Partial prince': 1,                 # Maybe just keep at 1
                   'Linesearch tolerance': .99,           # .5 for deterministic, .01 for stochastic
                   'Function precision': 1e-12,
                   'Verify level': -1,
-                  'Nonderivative linesearch': 0,
-                  'Elastic weight': 1.e8}
+                  'Nonderivative linesearch': 0}
+                  #'Elastic weight': 1.e8}
     # ---------------------------------------------------------------------------
 
 
@@ -94,7 +94,9 @@ if __name__ == "__main__":
         if Gain_Parametrization_Type.lower() == 'arc_lqr':
             init_guess['gain_weights'] = 1e-4*jnp.ones(2*cfg_args.N_arcs)
         elif Gain_Parametrization_Type.lower() == 'fulltraj_lqr':
-            init_guess['gain_weights'] = 1e-2*jnp.ones(2*cfg_args.N_arcs)
+            gain_weights_guess = 1e-1*jnp.ones((cfg_args.N_arcs+1,2))
+            #gain_weights_guess = gain_weights_guess.at[(1,-1),:].set(1e0)
+            init_guess['gain_weights'] = gain_weights_guess.flatten()
     if hot_start:
         sol_hot = load_OptimizerSol(hot_start_file)
         for key in sol_hot.keys():
@@ -116,8 +118,8 @@ if __name__ == "__main__":
         if Gain_Parametrization_Type.lower() == 'arc_lqr':
             gain_weight_ln = 2*cfg_args.N_arcs
         elif Gain_Parametrization_Type.lower() == 'fulltraj_lqr':
-            gain_weight_ln = 2*cfg_args.N_arcs
-        optprop.addVarGroup('gain_weights', gain_weight_ln, "c", value = init_guess['gain_weights'], lower = 1e-5)
+            gain_weight_ln = 2*(cfg_args.N_arcs+1)
+        optprop.addVarGroup('gain_weights', gain_weight_ln, "c", value = init_guess['gain_weights'], lower = 1e-4)
     if cfg_args.free_phasing:
         optprop.addVarGroup('alpha', 1, "c", value = init_guess['alpha'], lower = Boundary_Conds['alpha_min'], upper = Boundary_Conds['alpha_max'])
         optprop.addVarGroup('beta', 1, "c", value = init_guess['beta'], lower = Boundary_Conds['beta_min'], upper = Boundary_Conds['beta_max'])
