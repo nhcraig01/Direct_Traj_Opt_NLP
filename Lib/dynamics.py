@@ -299,14 +299,17 @@ def GainParameterizers(Gain_Type):
             A_i = A_arc_hst[i,:,:]
             B_i = B_arc_hst[i,:,:]
 
-            B_1i_r = B_arc_hst[i,:3,:]
-            B_1i_v = B_arc_hst[i,3:6,:]
+            # Nominal Code (Trying something new)
+            B_1i_r = B_arc_hst[i-1,:3,:]
+            B_1i_v = B_arc_hst[i-1,3:6,:]
 
             blk_r = xi_r[i]*jnp.linalg.inv(B_1i_r.T @ B_1i_r)
             blk_v = xi_v[i]*jnp.linalg.inv(B_1i_v.T @ B_1i_v)
             Q_i = jax.scipy.linalg.block_diag(blk_r, blk_v)
+            #Q_i = jnp.diag(jnp.array([xi_r[i]*jnp.ones(3,), xi_v[i]*jnp.ones(3,)]).flatten())
 
             # Iterate and compute K_i and S_i
+            #R_i_mod = B_i.T @ B_i
             M_i = R_i + B_i.T @ S_i1 @ B_i
             tmp_mat = jnp.linalg.solve(M_i,B_i.T @ S_i1) # M_i_inv @ B_i.T @ S_i1
 
@@ -316,7 +319,16 @@ def GainParameterizers(Gain_Type):
             Q_i_mod = Q_i
 
             S_i = A_i.T @ (S_i1 - S_i1 @ B_i @ tmp_mat) @ A_i + Q_i_mod 
+            
 
+            """# New test code
+            R_i_inv = jnp.linalg.inv(B_i.T @ B_i)
+            tmp_mat = jnp.linalg.inv(jnp.linalg.inv(S_i1) + B_i @ R_i_inv @ B_i.T)
+            K_i = - R_i_inv @ B_i.T @ tmp_mat @ A_i
+            K_arc_hst = K_arc_hst.at[i,:,0:6].set(K_i)
+            Q_i = jnp.diag(jnp.array([xi_r[i]*jnp.ones(3,), xi_v[i]*jnp.ones(3,)]).flatten())
+            S_i = Q_i + A_i.T @ tmp_mat @ A_i
+            """
             output_dict = {'index_back': index_back, 'A_arc_hst': A_arc_hst, 'B_arc_hst': B_arc_hst,
                            'xi_r': xi_r, 'xi_v': xi_v, 'K_arc_hst': K_arc_hst,'R_i': R_i, 'S_i1': S_i}
 
@@ -334,10 +346,13 @@ def GainParameterizers(Gain_Type):
             B_1N_r = B_arc_hst[-1,:3,:]
             B_1N_v = B_arc_hst[-1,3:6,:]
 
+            # Nominal Code (Trying something new)
             blk_r = xi_r[-1]*jnp.linalg.inv(B_1N_r.T @ B_1N_r)
             blk_v = xi_v[-1]*jnp.linalg.inv(B_1N_v.T @ B_1N_v)
             Q_N = jax.scipy.linalg.block_diag(blk_r, blk_v)
+            
 
+            #Q_N = jnp.diag(jnp.array([xi_r[-1]*jnp.ones(3,), xi_v[-1]*jnp.ones(3,)]).flatten())
             A_rv_arc_hst = A_arc_hst[:,:6,:6]
             B_rv_arc_hst = B_arc_hst[:,:6,:]
 

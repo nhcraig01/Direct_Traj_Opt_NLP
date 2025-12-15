@@ -46,7 +46,7 @@ if __name__ == "__main__":
     Feedback_Control_Type = "true_state"
 
     hot_start = True
-    hot_start_sol = "stochastic_gauss_zoh_true_state"
+    hot_start_sol = "deterministic"
     # ---------------------------------------------------------------------------
     file_name = Problem_Type
     if Problem_Type.lower() == 'stochastic_gauss_zoh': 
@@ -61,13 +61,13 @@ if __name__ == "__main__":
     optOptions = {'Major optimality tolerance': 1e-5,  # Pretty much always keep this at 1.e-5 (linesearch_tol is more important)
                   'Major feasibility tolerance': 1e-6,  
                   'Minor feasibility tolerance': 1e-6,
-                  'Major iterations limit': 0,
+                  'Major iterations limit': 2000,
                   'Partial prince': 1,                 # Maybe just keep at 1
                   'Linesearch tolerance': .99,           # .5 for deterministic, .01 for stochastic
                   'Function precision': 1e-12,
                   'Verify level': -1,
-                  'Nonderivative linesearch': 0}
-                  #'Elastic weight': 1.e8}
+                  'Nonderivative linesearch': 0,
+                  'Elastic weight': 1.e8}
     # ---------------------------------------------------------------------------
 
 
