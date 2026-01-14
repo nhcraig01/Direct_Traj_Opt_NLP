@@ -108,6 +108,7 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str, gain_p
     phasing = config['boundary_conditions']['type']
     dt_detail = (t_node_bound[1] - t_node_bound[0])/(arc_length_det - 1)
     post_insert_length = int(tf_T//dt_detail + 1)
+    tf_T = dt_detail*(post_insert_length - 1)
     
     length = transfer_length_det + post_insert_length - 1
 
@@ -390,14 +391,22 @@ def prepare_sol(solution, Sys, Boundary_Conds, propagators, models, dyn_args, cf
     # Run Monte Carlo Simulations
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
         inputs = {'t_node_bound': t_node_bound,
+                  'det_X_hst': output['Det']['X_hst'],
                   'det_X_node_hst': output['Det']['X_node_hst'],
                   'det_U_arc_hst': output['Det']['U_arc_hst'],
                   'K_arc_hst': output['Det']['K_arc_hst'],
                   'dV_mean': output['Det']['dV_mean']}
+        if cfg_args.feedback_type.lower() == 'estimated_state':
+            inputs['A_hst'] = output['Det']['A_hst']
+            inputs['B_hst'] = output['Det']['B_hst']
+            inputs['h_hst'] = output['Det']['h_hst']
+            inputs['H_hst'] = output['Det']['H_hst']
+            inputs['L_hst'] = output['Det']['L_hst']
+            inputs['P_v_hst'] = output['Det']['P_v_hst']
         
         rng_seed = 0
         print("Running Detailed Monte Carlo Simulations...")
-        output['MC_Runs'] = sim_MC_trajs(inputs, rng_seed, Sys, dyn_args, cfg_args, propagators['propagator_e'])
+        output['MC_Runs'] = sim_MC_trajs(inputs, rng_seed, Sys, dyn_args, cfg_args, propagators['propagator_e'], models)
         # output['MC_Runs']['MC_P_ks'], output['MC_Runs']['MC_dV_tcm_scale'] = process_MC_results(output)
 
     return output
@@ -455,6 +464,7 @@ def save_sol(output, Sys, save_loc: str, dyn_args, cfg_args):
         f.create_dataset("Det_dV_mean", data=output['Det']['dV_mean'])
 
         if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
+            f.create_dataset("Feedback_type", data=cfg_args.feedback_type)
             f.create_dataset("Det_TCM_norm_dV_hst", data=output['Det']['TCM_norm_dV_hst'])
             f.create_dataset("Det_TCM_norm_bound_hst", data=output['Det']['TCM_norm_bound_hst'])
             f.create_dataset("Det_U_norm_dV_hst", data=output['Det']['U_norm_dV_hst'])
@@ -466,10 +476,15 @@ def save_sol(output, Sys, save_loc: str, dyn_args, cfg_args):
             f.create_dataset("Det_K_hst", data=output['Det']['K_hst'])
             f.create_dataset("Det_gain_weights_hst", data=output['Det']['gain_weights_hst'])
             f.create_dataset("Det_P_hst", data=output['Det']['P_hst'])
+            if cfg_args.feedback_type.lower() == 'estimated_state':
+                f.create_dataset("Det_Phat_hst", data=output['Det']['Phat_hst'])
+                f.create_dataset("Det_Ptild_hst", data=output['Det']['Ptild_hst'])
             f.create_dataset("Det_P_Xf_targ", data=output['Det']['P_Xf_targ'])
             f.create_dataset("Det_P_XT_targ", data=output['Det']['P_XT_targ'])
             f.create_dataset("Det_P_Targ_hst", data=output['Det']['P_Targ_hst'])
             f.create_dataset("MC_X_hsts", data=output['MC_Runs']['X_hsts'])
+            if cfg_args.feedback_type.lower() == 'estimated_state':
+                f.create_dataset("MC_Xhat_hsts", data=output['MC_Runs']['Xhat_hsts'])
             f.create_dataset("MC_t_hsts", data=output['MC_Runs']['t_hsts'])
             f.create_dataset("MC_U_hsts", data=output['MC_Runs']['U_hsts'])
             f.create_dataset("MC_U_hsts_sph", data=output['MC_Runs']['U_hsts_sph'])

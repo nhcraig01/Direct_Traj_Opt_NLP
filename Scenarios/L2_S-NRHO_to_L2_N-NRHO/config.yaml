@@ -5,16 +5,17 @@ dynamics:
   type: "CR3BP"
   sys_param_file: '../CR3BP_dev/EarthMoon_System/EMsys.yaml'
 integration:
-  a_tol: 1.e-12
-  r_tol: 1.e-12
+  a_tol: 1.e-13
+  r_tol: 1.e-13
 traj_parameters:
   control_arcs: 40
   sub_arcs: 1
-  save_pts_detailed: 22
+  save_pts_detailed: 2
   MC_trials: 1000
 boundary_conditions:
   t0: "2026-01-01T00:00:00"
   tf: "2026-01-11T00:00:00"
+  tf_T: .25
   initial_orbit:
     family_path: '../CR3BP_dev/EarthMoon_System/L2_S_Halo.h5'
     Orb_ID: 323
@@ -36,24 +37,25 @@ engine:
   T_max: .5
 uncertainty:
   covariance:
-    initial_dispersion:
-      pos_sig: 1
+    initial_dispersion: # If true state feedback, this is total. If estimated state feedback, this is estimated state dispersion
+      pos_sig: 10
       vel_sig: .01
       mass_sig: 1.e-12
-    initial_error:
-      pos_sig: 0.
-      vel_sig: 0.
-      mass_sig: 0.
-    target_total:
-      pos_sig: 10
-      vel_sig: .02
+    initial_error: # If true state feedback, this is ignored. If estimated state feedback, this is initial estimation error
+      pos_sig: .01
+      vel_sig: .001
+      mass_sig: 1.e-12
+    post_insert_target_total:
+      pos_sig: 50
+      vel_sig: .01
       mass_sig: 60
   acc_sig: 5.e-12
   measurement:
-    type: 'range'
+    type: 'position_test'
     observer_body: 'r1'
     observer_alt_lat_lon: [6371., 0., 0.]
     range_sig: 1.e-3
+    pos_sig: 1.0
   gates:
     fixed_mag: 1.e-3
     prop_mag: 1.e-3
@@ -64,7 +66,7 @@ uncertainty:
 constraints: 
   col_avoid:
     parameters:
-      r_obj: [384967.8803361727, 0., 0.]
+      obj_body: 'r2'
       safe_d: 1737.5
     det:
       bool: true
