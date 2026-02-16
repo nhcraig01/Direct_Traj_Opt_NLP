@@ -26,6 +26,9 @@ if __name__ == "__main__":
     # Scenario Folder Names:
     #   L2_S-NRHO_to_L2_N-NRHO
     #   L1_N-HO_to_L2_N-HO
+    #   L1_Lyap_to_L2_Lyap
+    #   L2_S-HO_to_L1_Lyap
+    #   L2_S-HO_to_L4_N-Axial
     #   Sandbox
     # 
     # Problem Types:
@@ -39,41 +42,54 @@ if __name__ == "__main__":
     # Feedback Controller Types:
     #   true_state
     #   estimated_state (ONLY WORKS WITH 1 SUB-ARC AND 2 DETAILED SAVE POINTS (ONE ON EITHER END OF THE ARC)... FOR NOW)
+    #
+    # Measurement Types: 
+    #   position
+    #   range
+    #   range_rate
+    #   angles
     # ---------------------------------------------------------------------------
-    folder_name = "Sandbox"
+    folder_name = "L1_N-HO_to_L2_N-HO"
     Problem_Type = "stochastic_gauss_zoh"
+
     Gain_Parametrization_Type = "arc_lqr"
     Feedback_Control_Type = "true_state"
+    Measurements = ("range", "range_rate", "angles")
 
     hot_start = True
-    hot_start_sol = "stochastic_gauss_zoh_true_state"
+    hot_start_sol = "deterministic"
     # ---------------------------------------------------------------------------
     file_name = Problem_Type
     if Problem_Type.lower() == 'stochastic_gauss_zoh': 
         file_name += "_" + Feedback_Control_Type
+        if Feedback_Control_Type.lower() == 'estimated_state':
+            file_name += "_" + "_".join(Measurements)
+
     config_file = r"Scenarios/"+folder_name+"/config.yaml"
     hot_start_file = r"Scenarios/"+folder_name+"/"+hot_start_sol+"_sol.h5"
     save_file = r"Plotting/Scenarios/"+folder_name+"/"+file_name+"/"
+
     OptimSol_save_file = r"Scenarios/"+folder_name+"/"+file_name+"_sol.h5"
     # ---------------------------------------------------------------------------
 
     # SNOPT Options -------------------------------------------------------------
-    optOptions = {'Major optimality tolerance': 1e-5,  # Pretty much always keep this at 1.e-5 (linesearch_tol is more important)
-                  'Major feasibility tolerance': 1e-6,  
-                  'Minor feasibility tolerance': 1e-6,
-                  'Major iterations limit': 0,
-                  'Partial prince': 10,                 # Maybe just keep at 1
-                  'Linesearch tolerance': .99,           # .5 for deterministic, .1 for stochastic
-                  'Function precision': 1e-12,
+    optOptions = {'Major optimality tolerance': 1e-5,   # Pretty much always keep this at 1.e-5 (linesearch_tol is more important)
+                  'Major feasibility tolerance': 1e-6,  # Keep here, changes how well the constraints are met
+                  'Minor feasibility tolerance': 1e-6,  # Similar to above but for the sub-problem
+                  'Major iterations limit': 1000,
+                  'Partial prince': 1,                 # (Keep at 1) Impacts the number of variales to examine in the gradient search (larger is fewer)
+                  'Linesearch tolerance': .99,          # Sets the level of accuracy to find in the quadratic sub problem
+                  'Function precision': 1e-9,
                   'Verify level': -1,
                   'Nonderivative linesearch': 0,
-                  'Elastic weight': 1.e6}
+                  'Major step limit': 1e-2,              # (Lower to keep near guess) Limits the step size of the optimization variables (can help with convergence in some cases)
+                  'Elastic weight': 1.e4}
     # ---------------------------------------------------------------------------
 
 
     # Process Configuration - System Constants, optimization arguments, boundary conditions, dynamical eoms, and optimization type
     config = yaml_load(config_file)
-    Sys, models, Boundary_Conds, cfg_args, dyn_args = process_config(config, Problem_Type, Feedback_Control_Type, Gain_Parametrization_Type)
+    Sys, models, Boundary_Conds, cfg_args, dyn_args = process_config(config, Problem_Type, Feedback_Control_Type, Gain_Parametrization_Type, Measurements)
 
     # Propagation functions
     eom_e, propagators, iterators = prepare_prop_funcs(eoms_gen, models, propagator_gen, dyn_args, replace(cfg_args, N_save=2))
@@ -84,6 +100,8 @@ if __name__ == "__main__":
 
     # Set up initial guess and hot starter
     print("Setting Up Initial Guess")
+    #U_guess_key = 1
+    #U_arg_rand = jax.random.multivariate_normal(jax.random.PRNGKey(U_guess_key), mean = jnp.zeros(3,), cov = 2e-1*jnp.eye(3), shape=(cfg_args.N_arcs,))
     init_guess = {'U_arc_hst': 1e-2*jnp.ones(3*cfg_args.N_arcs), 
                   'X0': jnp.hstack([Boundary_Conds['X0_init'],1]), 
                   'Xf': jnp.hstack([Boundary_Conds['Xf_init'],0.95])}
@@ -92,9 +110,9 @@ if __name__ == "__main__":
         init_guess['beta'] = Boundary_Conds['beta_min']
     if Problem_Type == 'stochastic_gauss_zoh':
         if Gain_Parametrization_Type.lower() == 'arc_lqr':
-            init_guess['gain_weights'] = 1e-4*jnp.ones(2*cfg_args.N_arcs)
+            init_guess['gain_weights'] = 1e-1*jnp.ones(2*cfg_args.N_arcs)
         elif Gain_Parametrization_Type.lower() == 'fulltraj_lqr':
-            gain_weights_guess = 1e-4*jnp.ones((cfg_args.N_arcs+1,2))
+            gain_weights_guess = 1e-5*jnp.ones((cfg_args.N_arcs+1,2))
             #gain_weights_guess = gain_weights_guess.at[(1,-1),:].set(1e0)
             init_guess['gain_weights'] = gain_weights_guess.flatten()
     if hot_start:

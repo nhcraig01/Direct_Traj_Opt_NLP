@@ -308,15 +308,6 @@ def GainParameterizers(Gain_Type):
 
             S_i = A_i.T @ (S_i1 - S_i1 @ B_i @ tmp_mat) @ A_i + Q_i_mod 
             
-
-            """# New test code
-            R_i_inv = jnp.linalg.inv(B_i.T @ B_i)
-            tmp_mat = jnp.linalg.inv(jnp.linalg.inv(S_i1) + B_i @ R_i_inv @ B_i.T)
-            K_i = - R_i_inv @ B_i.T @ tmp_mat @ A_i
-            K_arc_hst = K_arc_hst.at[i,:,0:6].set(K_i)
-            Q_i = jnp.diag(jnp.array([xi_r[i]*jnp.ones(3,), xi_v[i]*jnp.ones(3,)]).flatten())
-            S_i = Q_i + A_i.T @ tmp_mat @ A_i
-            """
             output_dict = {'index_back': index_back, 'A_arc_hst': A_arc_hst, 'B_arc_hst': B_arc_hst,
                            'xi_r': xi_r, 'xi_v': xi_v, 'K_arc_hst': K_arc_hst,'R_i': R_i, 'S_i1': S_i}
 
@@ -362,109 +353,70 @@ def GainParameterizers(Gain_Type):
 # Estimator Functions
 # --------------------
 
-def EKF_time(vals_k, dyn_vals, noise_terms):
+def EKF_time(vals_k, dyn_terms, noise_terms):
     # Unpack the current estimate and error values
-    Xhat_k = vals_k['Xhat_k']
-    Xtild_k = vals_k['Xtild_k']
     Phat_k = vals_k['Phat_k']
     Ptild_k = vals_k['Ptild_k']
 
     # Unpack the dynamical values
-    A_k = dyn_vals['A_k']
-    B_k = dyn_vals['B_k']
-    K_k = dyn_vals['K_k']
+    A_k = dyn_terms['A_k']
+    B_k = dyn_terms['B_k']
+    K_k = dyn_terms['K_k']
 
     # Unpack noise terms
     G_exe = noise_terms['G_exe']
     G_stoch = noise_terms['G_stoch']
 
-    Astar_k = A_k + B_k @ K_k
-
-    # Propagate the mean values
-    Xhat_k1 = Astar_k @ Xhat_k
-    Xtild_k1 = A_k @ Xtild_k
-
     # Propagate the covariance values
+    Astar_k = A_k + B_k @ K_k
     Phat_k1 = Astar_k @ Phat_k @ Astar_k.T
     Ptild_k1 = A_k @ Ptild_k @ A_k.T + B_k @ (G_exe + G_stoch) @ B_k.T
     P_k1 = Phat_k1 + Ptild_k1
 
-    priori_vals_k1 = {'Xhat_k1': Xhat_k1,
-                      'Xtild_k1': Xtild_k1,
-                      'Phat_k1': Phat_k1,
+    priori_vals_k1 = {'Phat_k1': Phat_k1,
                       'Ptild_k1': Ptild_k1,
                       'P_k1': P_k1}
 
     return priori_vals_k1
 
-def EKF_measurement(priori_vals_k, meas_terms):
+def EKF_measurement(priori_vals_k1, meas_terms):
     # Unpack the apriori estimate and error values
-    Xhat_k = priori_vals_k['Xhat_k']
-    Xtild_k = priori_vals_k['Xtild_k']
-    Phat_k = priori_vals_k['Phat_k']
-    Ptild_k = priori_vals_k['Ptild_k']
+    Xhat_k1 = priori_vals_k1['Xhat_k1']
+    Phat_k1 = priori_vals_k1['Phat_k1']
+    Ptild_k1 = priori_vals_k1['Ptild_k1']
 
     # Unpack the measurement values
-    y_k = meas_terms['y_k']
-    ybar_k = meas_terms['ybar_k']
-    H_k = meas_terms['H_k']
-    P_v = meas_terms['P_v']
+    z_k1 = meas_terms['z_k1']
+    z_est_k1 = meas_terms['z_est_k1']
+    p_v_est_k1 = meas_terms['P_v_est_k1']
+    H_est_k1 = meas_terms['H_est_k1']
 
     # Compute the Kalman Gain
-    C_k = Ptild_k @ H_k.T
-    W_k = H_k @ Ptild_k @ H_k.T + P_v
-    L_k = jax.scipy.linalg.solv(W_k.T, C_k.T).T  # L_k = C_k @ jnp.linalg.inv(W_k)
+    C_k = Ptild_k1 @ H_est_k1.T
+    W_k = H_est_k1 @ Ptild_k1 @ H_est_k1.T + p_v_est_k1
+    L_k = jax.scipy.linalg.solve(W_k.T, C_k.T).T  # L_k = C_k @ jnp.linalg.inv(W_k)
 
     # Update the mean values
-    update_term = L_k(y_k - (ybar_k + H_k @ Xhat_k))
-    Xhat_k_p = Xhat_k + update_term
-    Xtild_k_p = Xtild_k + update_term
+    Xhat_k1_p = Xhat_k1 + L_k @ (z_k1 - z_est_k1)
 
     # Update the covariance values
-    update_term = (jnp.eye(7) - L_k @ H_k)
-    Phat_k_p = Phat_k + L_k @ W_k @ L_k.T
-    Ptild_k_p = update_term @ Ptild_k @ update_term.T + L_k @ P_v @ L_k.T
+    update_term = (jnp.eye(7) - L_k @ H_est_k1)
+    Phat_k1_p = Phat_k1 + L_k @ W_k @ L_k.T
+    Ptild_k1_p = update_term @ Ptild_k1 @ update_term.T + L_k @ p_v_est_k1 @ L_k.T
 
-    P_k_p = Phat_k_p + Ptild_k_p
+    P_k1_p = Phat_k1_p + Ptild_k1_p
 
-    posteriori_vals_k = {'Xhat_k_p': Xhat_k_p,
-                         'Xtild_k_p': Xtild_k_p,
-                         'Phat_k_p': Phat_k_p,
-                         'Ptild_k_p': Ptild_k_p,
-                         'P_k_p': P_k_p}
+    posteriori_vals_k1 = {'Xhat_k1_p': Xhat_k1_p,
+                         'Phat_k1_p': Phat_k1_p,
+                         'Ptild_k1_p': Ptild_k1_p,
+                         'P_k1_p': P_k1_p}
 
-    return posteriori_vals_k
+    return posteriori_vals_k1
 
 
 # -------------------
 # Measurement Models
 # -------------------
-
-def range_measurement_model(r_obs, range_sig):
-    # State to be estimated
-    r_x, r_y, r_z, v_x, v_y, v_z, m = sp.symbols('r_x, r_y, r_z, v_x, v_y, v_z, m', real=True)
-    X_sym = sp.Matrix([[r_x],
-                    [r_y],
-                    [r_z],
-                    [v_x],
-                    [v_y],
-                    [v_z],
-                    [m]])
-
-    # Observer position
-    obs_x, obs_y, obs_z = r_obs
-
-    dist = sp.sqrt((r_x - obs_x)**2 + (r_y - obs_y)**2 + (r_z - obs_z)**2)
-    dist = sp.Matrix([[dist]])
-    dist_jac = dist.jacobian(X_sym)
-
-    h_eval = sp.lambdify((X_sym,), dist, 'jax')
-    H_eval = sp.lambdify((X_sym,), dist_jac, 'jax')
-    P_v_eval = lambda X: jnp.array([[range_sig**2]])
-
-    meas_model = {'h_eval': h_eval, 'H_eval': H_eval, 'P_v_eval': P_v_eval}
-
-    return meas_model
 
 def test_pos_measurement_model(pos_sig):
     # State to be estimated
@@ -483,13 +435,162 @@ def test_pos_measurement_model(pos_sig):
     pos_meas_jac = pos_meas.jacobian(X_sym)
 
     h_eval = sp.lambdify((X_sym,), pos_meas, 'jax')
-    h_eval_flat = lambda x: h_eval(x).squeeze()
+    h_eval_flat = lambda x: jnp.reshape(h_eval(x), (3,))
     H_eval = sp.lambdify((X_sym,), pos_meas_jac, 'jax')
     P_v_eval = lambda X: jnp.diag(jnp.array([pos_sig**2, pos_sig**2, pos_sig**2]))
 
     meas_model = {'h_eval': h_eval_flat, 'H_eval': H_eval, 'P_v_eval': P_v_eval}
 
     return meas_model
+
+def range_measurement_model(r_obs, range_sig):
+    # State to be estimated
+    r_x, r_y, r_z, v_x, v_y, v_z, m = sp.symbols('r_x, r_y, r_z, v_x, v_y, v_z, m', real=True)
+    X_sym = sp.Matrix([[r_x],
+                    [r_y],
+                    [r_z],
+                    [v_x],
+                    [v_y],
+                    [v_z],
+                    [m]])
+
+    # Observer position
+    obs_x, obs_y, obs_z = r_obs
+
+    dist = sp.sqrt((r_x - obs_x)**2 + (r_y - obs_y)**2 + (r_z - obs_z)**2)
+    meas = sp.Matrix([[dist]])
+    meas_jac = meas.jacobian(X_sym)
+
+    h_eval = sp.lambdify((X_sym,), meas, 'jax')
+    h_eval_flat = lambda x: jnp.reshape(h_eval(x), (1,))
+    H_eval = sp.lambdify((X_sym,), meas_jac, 'jax')
+    P_v_eval = lambda X: jnp.array([[range_sig**2]])
+
+    meas_model = {'h_eval': h_eval_flat, 'H_eval': H_eval, 'P_v_eval': P_v_eval}
+
+    return meas_model
+
+def range_and_rate_measurement_model(r_obs, range_sig, rate_sig):
+    # State to be estimated
+    r_x, r_y, r_z, v_x, v_y, v_z, m = sp.symbols('r_x, r_y, r_z, v_x, v_y, v_z, m', real=True)
+    X_sym = sp.Matrix([[r_x],
+                    [r_y],
+                    [r_z],
+                    [v_x],
+                    [v_y],
+                    [v_z],
+                    [m]])
+
+    # Observer position
+    obs_x, obs_y, obs_z = r_obs
+
+    rel_pos = sp.Matrix([[r_x - obs_x],
+                         [r_y - obs_y],
+                         [r_z - obs_z]])
+    rel_vel = sp.Matrix([[v_x],
+                         [v_y],
+                         [v_z]])
+    dist = sp.sqrt(rel_pos.T @ rel_pos)[0]
+    range_rate = (rel_pos.T @ rel_vel)[0] / dist
+    meas = sp.Matrix([[dist],
+                      [range_rate]])
+    meas_jac = meas.jacobian(X_sym)
+
+    h_eval = sp.lambdify((X_sym,), meas, 'jax')
+    h_eval_flat = lambda x: jnp.reshape(h_eval(x), (2,))
+    H_eval = sp.lambdify((X_sym,), meas_jac, 'jax')
+    P_v_eval = lambda X: jnp.diag(jnp.array([range_sig**2, rate_sig**2]))
+
+    meas_model = {'h_eval': h_eval_flat, 'H_eval': H_eval, 'P_v_eval': P_v_eval}
+
+    return meas_model
+
+def measurement_model_builder(measurements, params):
+
+    # State to be estimated
+    r_x, r_y, r_z, v_x, v_y, v_z, m = sp.symbols('r_x, r_y, r_z, v_x, v_y, v_z, m', real=True)
+    X_sym = sp.Matrix([[r_x],
+                    [r_y],
+                    [r_z],
+                    [v_x],
+                    [v_y],
+                    [v_z],
+                    [m]])
+    
+    # Observer position
+    obs_x, obs_y, obs_z = params['r_obs']
+
+    # Various vectors needed
+    rel_pos = sp.Matrix([[r_x - obs_x],
+                         [r_y - obs_y],
+                         [r_z - obs_z]])
+    
+    rel_vel = sp.Matrix([[v_x],
+                         [v_y],
+                         [v_z]])
+   
+
+    # Position Measurement Set Up
+    pos = sp.Matrix([[r_x],
+                          [r_y],
+                          [r_z]])
+    pos_cov = sp.diag(params['pos_sig']**2, params['pos_sig']**2, params['pos_sig']**2)
+
+    # Range Measurement Set Up
+    rng = sp.sqrt((rel_pos.T @ rel_pos)[0])
+    rng_cov = sp.diag(params['range_sig']**2)
+
+    # Range_Rate Measurement Set Up 
+    rng_rate = (rel_pos.T @ rel_vel)[0] / rng
+    rng_rate_cov = sp.diag(params['rate_sig']**2)
+
+    # Angles Measurement Set Up
+    theta = sp.atan2(rel_pos[1], rel_pos[0])
+    phi = sp.asin(rel_pos[2] / rng)
+    angles = sp.Matrix([[theta],
+                        [phi]])
+    angles_cov = sp.diag(params['angles_sig']**2, params['angles_sig']**2)
+
+    # Build the measurement model based on selected measurements
+    meas_parts = []
+    cov_blocks = []
+    for meas in measurements: 
+        key = meas.lower()
+        if key in ("position", "pos"):
+            meas_parts.append(pos)
+            cov_blocks.append(pos_cov)
+        elif key in ("range", "rng"):
+            meas_parts.append(sp.Matrix([[rng]]))
+            cov_blocks.append(rng_cov)
+        elif key in ("range_rate", "rng_rate", "rate"):
+            meas_parts.append(sp.Matrix([[rng_rate]]))
+            cov_blocks.append(rng_rate_cov)
+        elif key in ("angles", "ang"):
+            meas_parts.append(angles)
+            cov_blocks.append(angles_cov)
+        else:
+            raise ValueError(f"Measurement type '{meas}' not recognized.")
+    
+    meas_vec = sp.Matrix.vstack(*meas_parts)
+    meas_cov = sp.diag(*cov_blocks)
+
+    n_state = int(X_sym.shape[0])
+    n_meas = int(meas_vec.shape[0])
+
+    meas_jac = meas_vec.jacobian(X_sym)
+
+    h_eval_raw = sp.lambdify((X_sym,), meas_vec, 'jax')
+    H_eval_raw = sp.lambdify((X_sym,), meas_jac, 'jax')
+    P_v_eval_raw = sp.lambdify((X_sym,), meas_cov, 'jax')
+
+    h_eval = lambda x: jnp.reshape(h_eval_raw(x), (n_meas,))
+    H_eval = lambda x: jnp.reshape(H_eval_raw(x), (n_meas, n_state))
+    P_v_eval = lambda x: jnp.reshape(P_v_eval_raw(x), (n_meas, n_meas))
+
+    meas_model = {'h_eval': h_eval, 'H_eval': H_eval, 'P_v_eval': P_v_eval, 'n_meas': n_meas}
+
+    return meas_model
+
 
 # --------------------------------
 # Numerical Propagation Functions
@@ -1212,7 +1313,7 @@ def sim_Det_traj(sol, Sys, propagators, models, dyn_args, cfg_args):
 
     return output_dict
 
-def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagator, models):
+def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagators, models):
     # Unpack inputs
     t_node_bound = dyn_args['t_node_bound']
     det_X_hst = inputs['det_X_hst']
@@ -1258,6 +1359,8 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagator, models
     X_hst = jnp.zeros((length, 7))
     if cfg_args.feedback_type.lower() == 'estimated_state':
         Xhat_hst = jnp.zeros((length, 7))
+        Phat_hst = jnp.zeros((length, 7, 7))
+        Ptild_hst = jnp.zeros((length, 7, 7))
     U_hst = jnp.zeros((length, 3))
     t_hst = jnp.zeros((length,))
 
@@ -1265,6 +1368,8 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagator, models
     X_hst = X_hst.at[0,:].set(X0_trial)
     if cfg_args.feedback_type.lower() == 'estimated_state':
         Xhat_hst = Xhat_hst.at[0,:].set(Xhat0_trial)
+        Phat_hst = Phat_hst.at[0,:,:].set(dyn_args['Phat_0'])
+        Ptild_hst = Ptild_hst.at[0,:,:].set(dyn_args['Ptild_0'])
     t_hst = t_hst.at[0].set(t_node_bound[0])
     # Loop through each arc
     for k in range(cfg_args.N_arcs):
@@ -1279,6 +1384,7 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagator, models
         if cfg_args.feedback_type.lower() == 'estimated_state':
             Xhat0_arc = Xhat_hst[arc_i_0,:]
             U_arc_tcm = MC_U_tcm_k(X0_arc_det, Xhat0_arc, K_arc_hst[k,:,:])
+            G_exe_arc = gates2Gexe(det_U_arc_hst[k,:], dyn_args['gates'])
         U_arc_det = det_U_arc_hst[k,:]
         U_arc_exe = MC_U_exe(U_arc_det, dyn_args['gates'], keys_U_exe[k])
         
@@ -1291,9 +1397,8 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagator, models
         U_arc_cmd = U_arc_det + U_arc_tcm
         U_arc_tot = U_arc_cmd + U_arc_exe + U_arc_w
         
-
         # Propagate the true state across the arc
-        sol_f_arc = propagator(X0_arc, U_arc_tot, t_node_bound[k], t_node_bound[k+1], cfg_args.arc_length_det, cfg_args)
+        sol_f_arc = propagators['propagator_e'](X0_arc, U_arc_tot, t_node_bound[k], t_node_bound[k+1], cfg_args.arc_length_det, cfg_args)
         X_hst_arc = sol_f_arc.ys
         t_hst_arc = sol_f_arc.ts
 
@@ -1301,34 +1406,52 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagator, models
         t_hst = t_hst.at[arc_i_0+1:arc_i_f+1].set(t_hst_arc[1:])
         U_hst = U_hst.at[arc_i_0:arc_i_f,:].set(jnp.tile(U_arc_cmd, (arc_length-1,1)))
 
-        # Propagate the estimated state across the arc
+        # Propagate the estimated state and associated covariances across the arc
         if cfg_args.feedback_type.lower() == 'estimated_state':
             # Loop through each sub-arc, only updating with measurement at the end of each sub-arc
             for j in range(cfg_args.N_subarcs):
                 subarc_i_0 = arc_i_0 + j*(cfg_args.N_save-1)  # starting point index for this sub-arc in saved history
                 subarc_i_f = subarc_i_0 + (cfg_args.N_save-1)  # starting point index for next sub-arc in saved history
                 Xhat0_subarc = Xhat_hst[subarc_i_0,:]
+                Phat0_subarc = Phat_hst[subarc_i_0,:,:]
+                Ptild0_subarc = Ptild_hst[subarc_i_0,:,:]
 
-                # Time propagation
-                sol_est_subarc = propagator(Xhat0_subarc, U_arc_cmd, t_hst[subarc_i_0], t_hst[subarc_i_f], cfg_args.N_save, cfg_args)
+                # EKF Time Propagation
+                sol_est_subarc = propagators['propagator_e'](Xhat0_subarc, U_arc_cmd, t_hst[subarc_i_0], t_hst[subarc_i_f], cfg_args.N_save, cfg_args)
                 Xhat_hst_subarc = sol_est_subarc.ys
+                A_hst_subarc = propagators['propagator_dX0_arc_vmap_e'](Xhat_hst_subarc[:-1,:], U_arc_cmd, t_hst[subarc_i_0:subarc_i_f], t_hst[subarc_i_0+1:subarc_i_f+1], cfg_args)
+                B_hst_subarc = propagators['propagator_dU_arc_vmap_e'](Xhat_hst_subarc[:-1,:], U_arc_cmd, t_hst[subarc_i_0:subarc_i_f], t_hst[subarc_i_0+1:subarc_i_f+1], cfg_args)
+                
+                vals_k = {'Phat_k': Phat0_subarc, 'Ptild_k': Ptild0_subarc}
+                dyn_terms = {'A_k': A_hst_subarc[0,:,:], 'B_k': B_hst_subarc[0,:,:], 'K_k':K_arc_hst[k,:,:]}
+                noise_terms = {'G_stoch': dyn_args['G_stoch'], 'G_exe': G_exe_arc}
 
-                # Measurement update at end of sub-arc
-                L_i1 = L_hst[subarc_i_f,:,:]
-                y_i1_est = models['measurements']['h_eval'](Xhat_hst_subarc[-1,:])
-                y_i1 = jax.random.multivariate_normal(keys_meas_nsy[k*cfg_args.N_subarcs + j], models['measurements']['h_eval'](X_hst[subarc_i_f,:]), P_v_hst[subarc_i_f,:,:])
-                Xhat_i1_m = Xhat_hst_subarc[-1,:]
-                Xhat_i1_p = Xhat_i1_m + L_i1 @ (y_i1 - y_i1_est)
-                Xhat_hst_subarc = Xhat_hst_subarc.at[-1,:].set(Xhat_i1_p)
+                priori_vals_k1 = EKF_time(vals_k, dyn_terms, noise_terms)
 
+                # EKF Measurement Update
+                priori_vals_k1['Xhat_k1'] = Xhat_hst_subarc[-1,:]
+                
+                z_k1 = jax.random.multivariate_normal(keys_meas_nsy[k*cfg_args.N_subarcs + j], 
+                                                      models['measurements']['h_eval'](X_hst[subarc_i_f,:]), 
+                                                      models['measurements']['P_v_eval'](X_hst[subarc_i_f,:]))
+                z_est_k1 = models['measurements']['h_eval'](Xhat_hst_subarc[-1,:])
+                P_v_est_k1 = models['measurements']['P_v_eval'](Xhat_hst_subarc[-1,:])
+                H_est_k1 = models['measurements']['H_eval'](Xhat_hst_subarc[-1,:])
+                meas_terms = {'z_k1': z_k1, 'z_est_k1': z_est_k1, 'P_v_est_k1': P_v_est_k1, 'H_est_k1': H_est_k1}
+
+                posteriori_vals_k1 = EKF_measurement(priori_vals_k1, meas_terms)
+                
+                Xhat_hst_subarc = Xhat_hst_subarc.at[-1,:].set(posteriori_vals_k1['Xhat_k1_p'])
                 Xhat_hst = Xhat_hst.at[subarc_i_0+1:subarc_i_f+1,:].set(Xhat_hst_subarc[1:,:]) 
-        
+                Phat_hst = Phat_hst.at[subarc_i_0+1:subarc_i_f+1,:,:].set(posteriori_vals_k1['Phat_k1_p'])
+                Ptild_hst = Ptild_hst.at[subarc_i_0+1:subarc_i_f+1,:,:].set(posteriori_vals_k1['Ptild_k1_p'])
+    
 
     # Post-insertion propagation
     post_insert_i0 = cfg_args.transfer_length_det - 1
     X0_post_insert = X_hst[post_insert_i0,:]
     t0_post_insert = t_hst[post_insert_i0]
-    sol_post_insert = propagator(X0_post_insert, jnp.zeros((3,)),t0_post_insert, t0_post_insert+dyn_args['tf_T'], cfg_args.post_insert_length, cfg_args)
+    sol_post_insert = propagators['propagator_e'](X0_post_insert, jnp.zeros((3,)),t0_post_insert, t0_post_insert+dyn_args['tf_T'], cfg_args.post_insert_length, cfg_args)
     X_hst_post_insert = sol_post_insert.ys
     t_hst_post_insert = sol_post_insert.ts
     X_hst = X_hst.at[post_insert_i0+1:,:].set(X_hst_post_insert[1:,:])
@@ -1336,9 +1459,20 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagator, models
     
     if cfg_args.feedback_type.lower() == 'estimated_state':
         Xhat0_hst_post_insert = Xhat_hst[post_insert_i0,:]
-        sol_post_insert_est = propagator(Xhat0_hst_post_insert, jnp.zeros((3,)),t0_post_insert, t0_post_insert+dyn_args['tf_T'], cfg_args.post_insert_length, cfg_args)
+        sol_post_insert_est = propagators['propagator_e'](Xhat0_hst_post_insert, jnp.zeros((3,)),t0_post_insert, t0_post_insert+dyn_args['tf_T'], cfg_args.post_insert_length, cfg_args)
         Xhat_hst_post_insert = sol_post_insert_est.ys
         Xhat_hst = Xhat_hst.at[post_insert_i0+1:,:].set(Xhat_hst_post_insert[1:,:])
+
+        A_pst_insert = propagators['propagator_dX0_e'](Xhat0_hst_post_insert, jnp.zeros((3,)), t0_post_insert, t0_post_insert+dyn_args['tf_T'], cfg_args)
+        Phat0_arc = Phat_hst[post_insert_i0,:,:]
+        Ptild0_arc = Ptild_hst[post_insert_i0,:,:]
+        vals_k = {'Phat_k': Phat0_arc, 'Ptild_k': Ptild0_arc}
+        dyn_terms = {'A_k': A_pst_insert, 'B_k': jnp.zeros((7,3)), 'G_stoch': jnp.zeros((3,3))}
+        ctrl_terms = {'K_k': jnp.zeros((3,7)), 'G_exe': jnp.zeros((3,3))}
+        meas_terms = {}
+        vals_k1 = propagators['cov_propagators']['subArc'](vals_k, dyn_terms, ctrl_terms, meas_terms, meas_update=False)
+        Phat_hst = Phat_hst.at[post_insert_i0+1,:,:].set(vals_k1['Phat_k1'])
+        Ptild_hst = Ptild_hst.at[post_insert_i0+1,:,:].set(vals_k1['Ptild_k1'])
     
 
     U_hst_sph = cart2sph_vmap(U_hst)
@@ -1351,7 +1485,7 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagator, models
     if cfg_args.feedback_type.lower() == 'true_state':
         return X_hst, U_hst, U_hst_sph, t_hst, dV_trial, dV_tcm_trial
     elif cfg_args.feedback_type.lower() == 'estimated_state':
-        return X_hst, Xhat_hst, U_hst, U_hst_sph, t_hst, dV_trial, dV_tcm_trial
+        return X_hst, Xhat_hst, Phat_hst, Ptild_hst, U_hst, U_hst_sph, t_hst, dV_trial, dV_tcm_trial
 
 def sim_MC_trajs(inputs, seed, Sys, dyn_args, cfg_args, propagator, models):
 
@@ -1368,6 +1502,8 @@ def sim_MC_trajs(inputs, seed, Sys, dyn_args, cfg_args, propagator, models):
     X_hsts = jnp.zeros((N,length, 7))
     if cfg_args.feedback_type.lower() == 'estimated_state':
         Xhat_hsts = jnp.zeros((N, length, 7))
+        Phat_hsts = jnp.zeros((N, length, 7, 7))
+        Ptild_hsts = jnp.zeros((N, length, 7, 7))
     U_hsts = jnp.zeros((N,length, 3))
     U_hsts_sph = jnp.zeros((N,length, 3))
     t_hsts = jnp.zeros((N,length,))
@@ -1383,9 +1519,11 @@ def sim_MC_trajs(inputs, seed, Sys, dyn_args, cfg_args, propagator, models):
         if cfg_args.feedback_type.lower() == 'true_state':
             X_hst_i, U_hst_i, U_hst_sph_i, t_hst_i, dV_i, dV_tcms_i = One_MC(keys_loop[0])
         elif cfg_args.feedback_type.lower() == 'estimated_state':
-            X_hst_i, Xhat_hst_i, U_hst_i, U_hst_sph_i, t_hst_i, dV_i, dV_tcms_i = One_MC(keys_loop[0])
+            X_hst_i, Xhat_hst_i, Phat_hst_i, Ptild_hst_i, U_hst_i, U_hst_sph_i, t_hst_i, dV_i, dV_tcms_i = One_MC(keys_loop[0])
 
             Xhat_hsts = Xhat_hsts.at[rng0:rngf,:,:].set(Xhat_hst_i)
+            Phat_hsts = Phat_hsts.at[rng0:rngf,:,:,:].set(Phat_hst_i)
+            Ptild_hsts = Ptild_hsts.at[rng0:rngf,:,:,:].set(Ptild_hst_i)
         X_hsts = X_hsts.at[rng0:rngf,:,:].set(X_hst_i)
         U_hsts = U_hsts.at[rng0:rngf,:,:].set(U_hst_i)
         U_hsts_sph = U_hsts_sph.at[rng0:rngf,:,:].set(U_hst_sph_i)
@@ -1401,5 +1539,9 @@ def sim_MC_trajs(inputs, seed, Sys, dyn_args, cfg_args, propagator, models):
                    'dV_tcms': np.array(dV_tcms)}
     if cfg_args.feedback_type.lower() == 'estimated_state':
         output_dict['Xhat_hsts'] = np.array(Xhat_hsts)
+        output_dict['Phat_hsts'] = np.array(Phat_hsts)
+        output_dict['Ptild_hsts'] = np.array(Ptild_hsts)
+        output_dict['Phat_mean_hst'] = np.mean(Phat_hsts, axis=0)
+        output_dict['Ptild_mean_hst'] = np.mean(Ptild_hsts, axis=0)
 
     return output_dict

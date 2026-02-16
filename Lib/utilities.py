@@ -6,7 +6,7 @@ from jax import numpy as jnp
 import diffrax as dfx
 
 from Lib.math import calc_t_elapsed_nd, sig2cov
-from Lib.dynamics import CR3BPDynamics, TrueStateFeedback_CovPropagators, EstimatedStateFeedback_CovPropagators, GainParameterizers, range_measurement_model, test_pos_measurement_model, forward_propagation_iterate, backward_propagation_iterate, objective_and_constraints, forward_propagation_cov_iterate, sim_MC_trajs, sim_Det_traj
+from Lib.dynamics import CR3BPDynamics, TrueStateFeedback_CovPropagators, EstimatedStateFeedback_CovPropagators, GainParameterizers, measurement_model_builder, forward_propagation_iterate, backward_propagation_iterate, objective_and_constraints, forward_propagation_cov_iterate, sim_MC_trajs, sim_Det_traj
 
 from scipy import stats
 
@@ -72,7 +72,7 @@ def process_sparsity(grad_nonsparse):
     
     return grad_sparse
 
-def process_config(config, det_or_stoch: str, feedback_control_type: str, gain_parametrization_type: str):
+def process_config(config, det_or_stoch: str, feedback_control_type: str, gain_parametrization_type: str, measurements: tuple):
     """ This function processes the configuration file and returns the optimization arguments and boundary conditions
     """
     # Name
@@ -107,8 +107,7 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str, gain_p
     t_node_bound = calc_t_elapsed_nd(t0, tf, N_nodes, Sys['Ts'])
     phasing = config['boundary_conditions']['type']
     dt_detail = (t_node_bound[1] - t_node_bound[0])/(arc_length_det - 1)
-    post_insert_length = int(tf_T//dt_detail + 1)
-    tf_T = dt_detail*(post_insert_length - 1)
+    post_insert_length = int(np.ceil(tf_T/dt_detail + 1))
     
     length = transfer_length_det + post_insert_length - 1
 
@@ -219,41 +218,40 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str, gain_p
                  'Bprop_eval': Bprop_eval,
                  'U_st_eval': U_st_eval,
                  'JC_eval': JC_eval}
+    models = {'dynamics': dynamics}
 
     # Choose Covariance Propagators
     if feedback_control_type.lower() == 'true_state':
         cov_propagators = TrueStateFeedback_CovPropagators()
     elif feedback_control_type.lower() == 'estimated_state':
         cov_propagators = EstimatedStateFeedback_CovPropagators()
+    models['covariance'] = cov_propagators
 
     # Choose Gain Parameterization
     FeedbackGainFuncs = GainParameterizers(gain_parametrization_type)
+    models['feedback_gains'] = FeedbackGainFuncs
 
-    # Choose Measurement Model
-    meas_type = config['uncertainty']['measurement']['type']
-    if meas_type.lower() == 'range':
-        meas_dim = 1
-        observer_body = config['uncertainty']['measurement']['observer_body']
-        alt_lat_lon = config['uncertainty']['measurement']['observer_alt_lat_lon']
-        r_obs_x, r_obs_y, r_obs_z = sph_to_cart(alt_lat_lon[0], alt_lat_lon[1], alt_lat_lon[2])
-        r_obs_body = np.array([r_obs_x, r_obs_y, r_obs_z])
-        r_obs = (Sys['dim'][observer_body] + r_obs_body)/Sys['Ls']
-        range_sig = config['uncertainty']['measurement']['range_sig']/Sys['Ls']
-        meas_model = range_measurement_model(r_obs, range_sig)
-    elif meas_type.lower() == 'position_test':
-        meas_dim = 3
-        pos_sig = config['uncertainty']['measurement']['pos_sig']/Sys['Ls']
-        meas_model = test_pos_measurement_model(pos_sig)
+    # Configure Measurement Models
+    observer_body = config['uncertainty']['measurement']['observer_body']
+    alt_lat_lon = config['uncertainty']['measurement']['observer_alt_lat_lon']
+    r_obs_x, r_obs_y, r_obs_z = sph_to_cart(alt_lat_lon[0], alt_lat_lon[1], alt_lat_lon[2])
+    r_obs_body = np.array([r_obs_x, r_obs_y, r_obs_z])
+    r_obs = (Sys['dim'][observer_body] + r_obs_body)/Sys['Ls']
+    pos_sig = config['uncertainty']['measurement']['pos_sig']/Sys['Ls']
+    range_sig = config['uncertainty']['measurement']['range_sig']/Sys['Ls']
+    rate_sig = config['uncertainty']['measurement']['range_rate_sig']/(Sys['Ls']/Sys['Ts'])
+    angles_sig = config['uncertainty']['measurement']['angles_sig']/(60*60)*(jnp.pi/180) # convert from arcsec to radians
+
+    meas_params = {'r_obs': r_obs, 'pos_sig': pos_sig, 'range_sig': range_sig, 'rate_sig': rate_sig, 'angles_sig': angles_sig}
+
+    meas_model = measurement_model_builder(measurements, meas_params)
 
     meas_model['h_vmap'] = jax.vmap(meas_model['h_eval'], in_axes=(0,))
     meas_model['H_vmap'] = jax.vmap(meas_model['H_eval'], in_axes=(0,))
     meas_model['P_v_vmap'] = jax.vmap(meas_model['P_v_eval'], in_axes=(0,))
+    meas_dim = meas_model['n_meas']
 
-    # Create models dict
-    models = {'dynamics': dynamics,
-              'covariance': cov_propagators,
-              'measurements': meas_model,
-              'feedback_gains': FeedbackGainFuncs}
+    models['measurements'] = meas_model
 
     # Static configuration arguments
     @dataclass()
@@ -406,7 +404,7 @@ def prepare_sol(solution, Sys, Boundary_Conds, propagators, models, dyn_args, cf
         
         rng_seed = 0
         print("Running Detailed Monte Carlo Simulations...")
-        output['MC_Runs'] = sim_MC_trajs(inputs, rng_seed, Sys, dyn_args, cfg_args, propagators['propagator_e'], models)
+        output['MC_Runs'] = sim_MC_trajs(inputs, rng_seed, Sys, dyn_args, cfg_args, propagators, models)
         # output['MC_Runs']['MC_P_ks'], output['MC_Runs']['MC_dV_tcm_scale'] = process_MC_results(output)
 
     return output
@@ -485,6 +483,10 @@ def save_sol(output, Sys, save_loc: str, dyn_args, cfg_args):
             f.create_dataset("MC_X_hsts", data=output['MC_Runs']['X_hsts'])
             if cfg_args.feedback_type.lower() == 'estimated_state':
                 f.create_dataset("MC_Xhat_hsts", data=output['MC_Runs']['Xhat_hsts'])
+                f.create_dataset("MC_Phat_hsts", data=output['MC_Runs']['Phat_hsts'])
+                f.create_dataset("MC_Ptild_hsts", data=output['MC_Runs']['Ptild_hsts'])
+                f.create_dataset("MC_Phat_mean_hst", data=output['MC_Runs']['Phat_mean_hst'])
+                f.create_dataset("MC_Ptild_mean_hst", data=output['MC_Runs']['Ptild_mean_hst'])
             f.create_dataset("MC_t_hsts", data=output['MC_Runs']['t_hsts'])
             f.create_dataset("MC_U_hsts", data=output['MC_Runs']['U_hsts'])
             f.create_dataset("MC_U_hsts_sph", data=output['MC_Runs']['U_hsts_sph'])

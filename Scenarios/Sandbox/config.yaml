@@ -1,5 +1,5 @@
 ---
-name: "L1 N-Halo to L2 S-Halo"
+name: "Random Testing"
 description: "IDK whaever... this is just random testing, go see the other scenarios for real stuff"
 dynamics:
   type: "CR3BP"
@@ -15,14 +15,14 @@ traj_parameters:
 boundary_conditions:
   t0: "2026-01-01T00:00:00"
   tf: "2026-01-21T00:00:00"
-  tf_T: 5
+  tf_T: 0.5
   initial_orbit:
-    family_path: '../CR3BP_dev/EarthMoon_System/L1_N_Halo.h5'
-    Orb_ID: 200
+    family_path: '../CR3BP_dev/EarthMoon_System/L2_S_Halo.h5'
+    Orb_ID: 150
     Start_Idx: 0
   final_orbit:
-    family_path: '../CR3BP_dev/EarthMoon_System/L2_S_Halo.h5'
-    Orb_ID: 310
+    family_path: '../CR3BP_dev/EarthMoon_System/L4_N_Axial.h5'
+    Orb_ID: 150
     Start_Idx: 0
   type: "free"
   alpha:
@@ -42,20 +42,21 @@ uncertainty:
       vel_sig: .001
       mass_sig: 1.e-12
     initial_error:
-      pos_sig: 0.
-      vel_sig: 0.
-      mass_sig: 0.
+      pos_sig: .01
+      vel_sig: .001
+      mass_sig: 1.e-12
     post_insert_target_total:
-      pos_sig: 150
-      vel_sig: .01
+      pos_sig: 50
+      vel_sig: .001
       mass_sig: 60
   acc_sig: 5.e-12
   measurement:
-    type: 'position_test'
-    observer_body: 'r2'
+    observer_body: 'r1'
     observer_alt_lat_lon: [6371., 0., 0.]
-    range_sig: 1.e-4
-    pos_sig: 1.e-4
+    pos_sig: 1.
+    range_sig: 3.e-3
+    range_rate_sig: 2.e-5
+    angles_sig: 20
   gates:
     fixed_mag: 1.e-3
     prop_mag: 1.e-3
@@ -67,7 +68,7 @@ constraints:
   col_avoid:
     parameters:
       obj_body: 'r2'
-      safe_d: 5000
+      safe_d: 3000
     det:
       bool: True
     stat:

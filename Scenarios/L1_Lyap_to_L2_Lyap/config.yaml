@@ -1,6 +1,6 @@
 ---
-name: "L1 N-HO to L2 N-HO Transfer"
-description: "Northern Halo to Halo transfer with small execution errors and small initial/final covariance, limited phasing"
+name: "L1 Lyap to L2 Lyap Transfer"
+description: "This tansfer is meant to try an emulate a near homoclinic transfer between the two Lyapunov families"
 dynamics:
   type: "CR3BP"
   sys_param_file: '../CR3BP_dev/EarthMoon_System/EMsys.yaml'
@@ -14,27 +14,27 @@ traj_parameters:
   MC_trials: 1000
 boundary_conditions:
   t0: "2026-01-01T00:00:00"
-  tf: "2026-02-01T00:00:00"
+  tf: "2026-01-16T00:00:00"
   tf_T: 0.5
   initial_orbit:
-    family_path: '../CR3BP_dev/EarthMoon_System/L1_N_Halo.h5'
-    Orb_ID: 145
+    family_path: '../CR3BP_dev/EarthMoon_System/L1_Lyap.h5'
+    Orb_ID: 20
     Start_Idx: 0
   final_orbit:
-    family_path: '../CR3BP_dev/EarthMoon_System/L2_N_Halo.h5'
-    Orb_ID: 30
+    family_path: '../CR3BP_dev/EarthMoon_System/L2_Lyap.h5'
+    Orb_ID: 20
     Start_Idx: 0
   type: "free"
   alpha:
-    min: 0.0
-    max: 1.0
+    min: .0
+    max: .1
   beta:
-    min: 0.0
-    max: 1.0
+    min: .0
+    max: .1
 engine:
   m0: 200
   Isp: 3337
-  T_max: .2
+  T_max: .5
 uncertainty:
   covariance:
     initial_dispersion:
@@ -68,7 +68,7 @@ constraints:
   col_avoid:
     parameters:
       obj_body: 'r2'
-      safe_d: 2000
+      safe_d: 5000
     det:
       bool: True
     stat:
