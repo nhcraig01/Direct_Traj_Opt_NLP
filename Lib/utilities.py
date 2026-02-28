@@ -154,8 +154,8 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str, gain_p
     # Spacecraft Parameters
     m0 = config['engine']['m0'] # Initial mass [kg]
     Isp = config['engine']['Isp']
-    U_max = config['engine']['T_max'] # N [kg m/s^3]
-    U_Acc_min_nd = (U_max/1000)/(Sys['As']*m0) # Minimum nd acceleration at max mass
+    T_max = config['engine']['T_max'] # N [kg m/s^3]
+    U_Acc_min_nd = (T_max/1000)/(Sys['As']*m0) # Minimum nd acceleration at max mass
     ve = Isp*g0/Sys['Vs']
 
     if U_Acc_min_nd*(t_node_bound[-1] - t_node_bound[0])/(1-1e-2) > ve:
@@ -259,6 +259,7 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str, gain_p
         cfg_name: str
         det_or_stoch: str
         feedback_type: str
+        measurements: tuple
         gain_param_type: str
         r_tol: float
         a_tol: float
@@ -284,7 +285,7 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str, gain_p
         mx_tcm_bound: float
         mx_dV_bound: float
         mx_col_bound: float
-    cfg_args = args_static(cfg_name, det_or_stoch, feedback_control_type, gain_parametrization_type, r_tol, a_tol, N_nodes, N_arcs, N_subarcs, N_trials, 
+    cfg_args = args_static(cfg_name, det_or_stoch, feedback_control_type, measurements, gain_parametrization_type, r_tol, a_tol, N_nodes, N_arcs, N_subarcs, N_trials, 
                            N_save, arc_length_det, arc_length_opt, transfer_length_det, post_insert_length, length, meas_dim, ve, U_Acc_min_nd, 
                            True if phasing == 'free' else False, det_col_avoid, stat_col_avoid, alpha_UT, beta_UT, kappa_UT, 
                            mx_tcm_bound, mx_dV_bound, mx_col_bound)
@@ -463,6 +464,7 @@ def save_sol(output, Sys, save_loc: str, dyn_args, cfg_args):
 
         if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
             f.create_dataset("Feedback_type", data=cfg_args.feedback_type)
+            f.create_dataset("Measurements", data="_".join(cfg_args.measurements))
             f.create_dataset("Det_TCM_norm_dV_hst", data=output['Det']['TCM_norm_dV_hst'])
             f.create_dataset("Det_TCM_norm_bound_hst", data=output['Det']['TCM_norm_bound_hst'])
             f.create_dataset("Det_U_norm_dV_hst", data=output['Det']['U_norm_dV_hst'])

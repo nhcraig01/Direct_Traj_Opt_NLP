@@ -32,6 +32,94 @@ def col_avoid(X, dyn_args):
 
 col_avoid_vmap = jax.vmap(col_avoid, in_axes=(0, None))
 
+def smooth_clip(x):
+    a = 30.0
+    x_smooth = (jax.nn.softplus(a*x)-jax.nn.softplus(a*(x-1.0)))/a
+    return x_smooth
+
+def col_avoid_interp(X_n, X_n1, dyn_args):
+    r_obj = dyn_args['r_obj']
+    safe_d = dyn_args['d_safe']
+
+    r_n = X_n[:3]
+    r_n1 = X_n1[:3]
+
+    t_st = ((r_obj-r_n).T@(r_n1-r_n))/((r_n1-r_n).T@(r_n1-r_n))
+
+    t_smooth = smooth_clip(t_st)
+    
+    r_t_st = r_n + t_smooth*(r_n1-r_n)
+    dist = jnp.linalg.norm(r_t_st-r_obj)
+    
+    return safe_d - dist
+
+col_avoid_interp_vmap = jax.vmap(col_avoid_interp, in_axes=(0,0,None))
+
+def  interp_col_avoid_vmap(X_hst, dyn_args):
+    col_avoid_vals = col_avoid_interp_vmap(X_hst[:-1,:], X_hst[1:,:], dyn_args)
+    return col_avoid_vals
+
+
+def poly_coefs(r_n, r_n1, r_n2):
+    a = (r_n+r_n2)/2 - r_n1
+    b = (r_n2-r_n)/2
+    c = r_n1
+    return a, b, c
+
+def poly_fit_d_dd_vals(a,b,c, r_obj, s):
+    r_s = a*s**2 + b*s + c
+    tmp_val = 2*a*s + b
+    norm = jnp.linalg.norm(r_s-r_obj)
+    dist_ds = (r_s-r_obj).T@tmp_val/jnp.linalg.norm(r_s-r_obj)
+    dist_dds = tmp_val.T@tmp_val/norm - (r_s-r_obj).T@tmp_val*((r_s-r_obj).T@tmp_val/(norm**3)) + (r_s-r_obj).T@(2*a)/norm
+    
+    return dist_ds, dist_dds
+
+def poly_min_iterate(i, input_dict):
+    a = input_dict['a']
+    b = input_dict['b']
+    c = input_dict['c']
+    r_obj = input_dict['r_obj']
+    s = input_dict['s']
+
+    dist_ds, dist_dds = poly_fit_d_dd_vals(a,b,c, r_obj, s)
+
+    s_new = s - dist_ds/dist_dds
+    s_new_clipped = smooth_clip(s_new)
+
+    output_dict = input_dict.copy()
+    output_dict['s'] = s_new_clipped
+
+    return output_dict
+
+def poly_min_col_avoid(X_n, X_n1, X_n2, dyn_args):
+    r_obj  = dyn_args['r_obj']
+    safe_d = dyn_args['d_safe']
+
+    a, b, c = poly_coefs(X_n[:3], X_n1[:3], X_n2[:3])
+
+    iters = 6
+    # Find zero from -1
+    s_guess = -1
+    s_min = jax.lax.fori_loop(0,iters, poly_min_iterate, {'a': a, 'b': b, 'c': c, 'r_obj': r_obj, 's': s_guess})['s']
+    r_s = a*s_min**2 + b*s_min + c
+    col_val_left = safe_d - jnp.linalg.norm(r_s-r_obj)
+
+    # Find zero from 1
+    s_guess = 1
+    s_min = jax.lax.fori_loop(0,iters, poly_min_iterate, {'a': a, 'b': b, 'c': c, 'r_obj': r_obj, 's': s_guess})['s']
+    r_s = a*s_min**2 + b*s_min + c
+    col_val_right = safe_d - jnp.linalg.norm(r_s-r_obj)
+
+    return jnp.array([col_val_left, col_val_right])
+
+poly_min_col_avoid_vmap = jax.vmap(poly_min_col_avoid, in_axes=(0,0,0,None))
+
+def poly_interp_col_avoid_vmap(X_hst, dyn_args):
+    col_avoid_vals = poly_min_col_avoid_vmap(X_hst[:-2,:], X_hst[1:-1,:], X_hst[2:,:], dyn_args)
+    return col_avoid_vals.reshape(-1)
+
+
 def stat_col_avoid(X_mean, P_x, dyn_args, cfg_args):
     nx = X_mean.shape[0]
 

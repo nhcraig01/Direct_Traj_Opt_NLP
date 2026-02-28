@@ -6,7 +6,7 @@ dynamics:
   sys_param_file: '../CR3BP_dev/EarthMoon_System/EMsys.yaml'
 integration:
   a_tol: 1.e-12
-  r_tol: 1.e-12
+  r_tol: 1.e-10
 traj_parameters:
   control_arcs: 40
   sub_arcs: 1

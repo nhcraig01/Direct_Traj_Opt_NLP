@@ -46,17 +46,17 @@ if __name__ == "__main__":
     # Measurement Types: 
     #   position
     #   range
-    #   range_rate
+    #   range-rate
     #   angles
     # ---------------------------------------------------------------------------
-    folder_name = "L1_N-HO_to_L2_N-HO"
-    Problem_Type = "stochastic_gauss_zoh"
+    folder_name = "L2_S-NRHO_to_L2_N-NRHO"
+    Problem_Type = "deterministic"
 
     Gain_Parametrization_Type = "arc_lqr"
-    Feedback_Control_Type = "true_state"
-    Measurements = ("range", "range_rate", "angles")
+    Feedback_Control_Type = "estimated_state"
+    Measurements = ("range","range-rate","angles")
 
-    hot_start = True
+    hot_start = False
     hot_start_sol = "deterministic"
     # ---------------------------------------------------------------------------
     file_name = Problem_Type
@@ -66,6 +66,7 @@ if __name__ == "__main__":
             file_name += "_" + "_".join(Measurements)
 
     config_file = r"Scenarios/"+folder_name+"/config.yaml"
+
     hot_start_file = r"Scenarios/"+folder_name+"/"+hot_start_sol+"_sol.h5"
     save_file = r"Plotting/Scenarios/"+folder_name+"/"+file_name+"/"
 
@@ -73,13 +74,13 @@ if __name__ == "__main__":
     # ---------------------------------------------------------------------------
 
     # SNOPT Options -------------------------------------------------------------
-    optOptions = {'Major optimality tolerance': 1e-5,   # Pretty much always keep this at 1.e-5 (linesearch_tol is more important)
-                  'Major feasibility tolerance': 1e-6,  # Keep here, changes how well the constraints are met
-                  'Minor feasibility tolerance': 1e-6,  # Similar to above but for the sub-problem
-                  'Major iterations limit': 1000,
-                  'Partial prince': 1,                 # (Keep at 1) Impacts the number of variales to examine in the gradient search (larger is fewer)
-                  'Linesearch tolerance': .99,          # Sets the level of accuracy to find in the quadratic sub problem
-                  'Function precision': 1e-9,
+    optOptions = {'Major optimality tolerance': 1e-5,   # Keep here
+                  'Major feasibility tolerance': 1e-6,  # Keep here - Changes how tightly the constraints are met
+                  'Minor feasibility tolerance': 1e-6,  # Similar to above but for the QP sub-problem
+                  'Major iterations limit': 5000,
+                  'Partial prince': 1,                  # Keep here - Impacts the number of variales to examine in the gradient search (larger is fewer)
+                  'Linesearch tolerance': .99,          # Keep here - Sets the level of accuracy to find in the quadratic sub problem
+                  'Function precision': 1e-10,           # Keep a few (3 to 4) orders of magnitude above the integration tolerances to keep SNOPT from seeing noise
                   'Verify level': -1,
                   'Nonderivative linesearch': 0,
                   'Major step limit': 1e-2,              # (Lower to keep near guess) Limits the step size of the optimization variables (can help with convergence in some cases)
@@ -100,9 +101,9 @@ if __name__ == "__main__":
 
     # Set up initial guess and hot starter
     print("Setting Up Initial Guess")
-    #U_guess_key = 1
-    #U_arg_rand = jax.random.multivariate_normal(jax.random.PRNGKey(U_guess_key), mean = jnp.zeros(3,), cov = 2e-1*jnp.eye(3), shape=(cfg_args.N_arcs,))
-    init_guess = {'U_arc_hst': 1e-2*jnp.ones(3*cfg_args.N_arcs), 
+    U_guess_key = 6
+    U_arg_rand = jax.random.multivariate_normal(jax.random.PRNGKey(U_guess_key), mean = jnp.zeros(3,), cov = 1e-2*jnp.eye(3), shape=(cfg_args.N_arcs,))
+    init_guess = {'U_arc_hst': U_arg_rand.flatten(), 
                   'X0': jnp.hstack([Boundary_Conds['X0_init'],1]), 
                   'Xf': jnp.hstack([Boundary_Conds['Xf_init'],0.95])}
     if cfg_args.free_phasing:
@@ -110,9 +111,9 @@ if __name__ == "__main__":
         init_guess['beta'] = Boundary_Conds['beta_min']
     if Problem_Type == 'stochastic_gauss_zoh':
         if Gain_Parametrization_Type.lower() == 'arc_lqr':
-            init_guess['gain_weights'] = 1e-1*jnp.ones(2*cfg_args.N_arcs)
+            init_guess['gain_weights'] = 1e-3*jnp.ones(2*cfg_args.N_arcs)
         elif Gain_Parametrization_Type.lower() == 'fulltraj_lqr':
-            gain_weights_guess = 1e-5*jnp.ones((cfg_args.N_arcs+1,2))
+            gain_weights_guess = 1e-4*jnp.ones((cfg_args.N_arcs+1,2))
             #gain_weights_guess = gain_weights_guess.at[(1,-1),:].set(1e0)
             init_guess['gain_weights'] = gain_weights_guess.flatten()
     if hot_start:
@@ -149,7 +150,7 @@ if __name__ == "__main__":
     optprop.addConGroup('c_Xf', 6, lower = 0, upper = 0, jac = grad_proc_sparse['c_Xf'])
     optprop.addConGroup('c_X_mp', 7, lower = 0, upper = 0, jac = grad_proc_sparse['c_X_mp'])
     if cfg_args.det_col_avoid and not cfg_args.stat_col_avoid:
-        optprop.addConGroup('c_det_col_avoid', cfg_args.N_nodes, upper = 0, jac = grad_proc_sparse['c_det_col_avoid'])
+        optprop.addConGroup('c_det_col_avoid', cfg_args.N_arcs*cfg_args.N_subarcs, upper = 0, jac = grad_proc_sparse['c_det_col_avoid'])
     if cfg_args.stat_col_avoid and Problem_Type != 'deterministic':
         optprop.addConGroup('c_stat_col_avoid', cfg_args.N_nodes, upper = 0, jac = grad_proc_sparse['c_stat_col_avoid'])
     
