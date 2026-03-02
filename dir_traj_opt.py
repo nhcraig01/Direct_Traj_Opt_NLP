@@ -77,13 +77,13 @@ if __name__ == "__main__":
     optOptions = {'Major optimality tolerance': 1e-5,   # Keep here
                   'Major feasibility tolerance': 1e-6,  # Keep here - Changes how tightly the constraints are met
                   'Minor feasibility tolerance': 1e-6,  # Similar to above but for the QP sub-problem
-                  'Major iterations limit': 5000,
+                  'Major iterations limit': 1000,
                   'Partial prince': 1,                  # Keep here - Impacts the number of variales to examine in the gradient search (larger is fewer)
                   'Linesearch tolerance': .99,          # Keep here - Sets the level of accuracy to find in the quadratic sub problem
                   'Function precision': 1e-10,           # Keep a few (3 to 4) orders of magnitude above the integration tolerances to keep SNOPT from seeing noise
                   'Verify level': -1,
                   'Nonderivative linesearch': 0,
-                  'Major step limit': 1e-2,              # (Lower to keep near guess) Limits the step size of the optimization variables (can help with convergence in some cases)
+                  'Major step limit': 1e0,              # (Lower to keep near guess) Limits the step size of the optimization variables (can help with convergence in some cases)
                   'Elastic weight': 1.e4}
     # ---------------------------------------------------------------------------
 
@@ -101,8 +101,8 @@ if __name__ == "__main__":
 
     # Set up initial guess and hot starter
     print("Setting Up Initial Guess")
-    U_guess_key = 6
-    U_arg_rand = jax.random.multivariate_normal(jax.random.PRNGKey(U_guess_key), mean = jnp.zeros(3,), cov = 1e-2*jnp.eye(3), shape=(cfg_args.N_arcs,))
+    U_guess_key = 4
+    U_arg_rand = jax.random.multivariate_normal(jax.random.PRNGKey(U_guess_key), mean = jnp.zeros(3,), cov = 1e-1*jnp.eye(3), shape=(cfg_args.N_arcs,))
     init_guess = {'U_arc_hst': U_arg_rand.flatten(), 
                   'X0': jnp.hstack([Boundary_Conds['X0_init'],1]), 
                   'Xf': jnp.hstack([Boundary_Conds['Xf_init'],0.95])}

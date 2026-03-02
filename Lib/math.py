@@ -1,3 +1,4 @@
+from operator import neg
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -32,27 +33,60 @@ def col_avoid(X, dyn_args):
 
 col_avoid_vmap = jax.vmap(col_avoid, in_axes=(0, None))
 
-def smooth_clip(x):
-    a = 30.0
+def smooth_clip(x,a):
     x_smooth = (jax.nn.softplus(a*x)-jax.nn.softplus(a*(x-1.0)))/a
     return x_smooth
+
+def smooth_sign(x,a):
+    return jax.nn.tanh(a*x)
+
+def smooth_box(x,a, t1, t2):
+    return .5*(jax.nn.tanh(a*(x+t1))-jax.nn.tanh(a*(x-t2)))
+
+def smooth_val2val(x, a, val1, val2):
+    return val1 + (val2-val1)*(-1/2*jax.nn.tanh(a*x)+1/2)
+
+def dot_norm(x,y):
+    return jnp.dot(x,y)/(jnp.linalg.norm(x)*jnp.linalg.norm(y)+1e-10)
 
 def col_avoid_interp(X_n, X_n1, dyn_args):
     r_obj = dyn_args['r_obj']
     safe_d = dyn_args['d_safe']
 
     r_n = X_n[:3]
+    v_n = X_n[3:6]
     r_n1 = X_n1[:3]
+    v_n1 = X_n1[3:6]
 
-    t_st = ((r_obj-r_n).T@(r_n1-r_n))/((r_n1-r_n).T@(r_n1-r_n))
+    r_nn1 = r_n1 - r_n
 
-    t_smooth = smooth_clip(t_st)
-    
-    r_t_st = r_n + t_smooth*(r_n1-r_n)
-    dist = jnp.linalg.norm(r_t_st-r_obj)
-    
-    return safe_d - dist
+    t_st = ((r_obj-r_n).T@r_nn1)/(r_nn1.T@r_nn1)
+    t_st_clipped = smooth_clip(t_st, a=100.0) # Clips t to [0,1]
 
+    r_t_st = r_n + t_st_clipped*r_nn1
+    dist_pure = jnp.linalg.norm(r_t_st-r_obj+1.0e-10)
+    safe_val_pure = safe_d - dist_pure
+    # Now multiply by the sign of the velocity dot to make sure r_n is moving away from the object
+    dot_term1 = v_n - v_n1
+    dot_term_2 = r_t_st - r_obj
+    check_1 = dot_norm(dot_term1, dot_term_2)
+
+    vel_sign_term = smooth_sign(check_1, a=20.0)
+    safe_val_pure_signed = safe_val_pure#*vel_sign_term
+    # Now multiply by a smooth box and add a small negative when t_st is outside of [0,1]
+    neg_val = 0.1
+    #safe_val_smoothed = (safe_val_pure_signed+neg_val)*smooth_box(-safe_val_pure,a = 100, t1 = 0.1, t2 = 0.05) - neg_val
+    switch_dist = 2.e-2
+    safe_val_smoothed = smooth_val2val(-safe_val_pure-switch_dist,a = 500, val1 = safe_val_pure, val2 = safe_val_pure_signed)
+    #jax.debug.print("t_st: {t_st}, disp_val: {disp_val}", t_st=t_st, disp_val=safe_val_pure) # Debug print to check values
+
+    return safe_val_smoothed 
+
+    # Ok pick this up later. Right now we are seeing that the multiplication of the velocity sign term is causing
+    # some problems that the optimizer is actually leveraging to allow for flying through the exact center of the moon.
+    # Specifically this is esenetially dot_term1 going to zero (not sure how that works though when dividing by its norm)
+    # In my attempts to get the trajectory to avoid the moon, I have somehow encouraged it to literally fly though
+    # THE VERY CENTER............................... this is a problem for after coffee.
 col_avoid_interp_vmap = jax.vmap(col_avoid_interp, in_axes=(0,0,None))
 
 def  interp_col_avoid_vmap(X_hst, dyn_args):

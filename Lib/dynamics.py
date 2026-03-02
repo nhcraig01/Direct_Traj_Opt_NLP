@@ -1096,6 +1096,7 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, mo
     if cfg_args.det_col_avoid and not cfg_args.stat_col_avoid:
         #col_vals = col_avoid_vmap(X_node_hst[:-1,:7], dyn_args)
         col_vals = interp_col_avoid_vmap(X_node_hst, dyn_args)
+        #jax.debug.print("col_vals: {}", col_vals)
         output_dict['c_det_col_avoid'] = col_vals.flatten() # constraint - deterministic collision avoidance
         col_print = jnp.max(output_dict['c_det_col_avoid'])
     if cfg_args.stat_col_avoid and cfg_args.det_or_stoch.lower() != 'deterministic':
