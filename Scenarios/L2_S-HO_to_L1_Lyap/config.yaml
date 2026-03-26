@@ -9,8 +9,8 @@ integration:
   r_tol: 1.e-10
 traj_parameters:
   control_arcs: 40
-  sub_arcs: 1
-  save_pts_detailed: 2
+  sub_arcs: 5
+  save_pts_detailed: 11
   MC_trials: 1000
 boundary_conditions:
   t0: "2026-01-01T00:00:00"

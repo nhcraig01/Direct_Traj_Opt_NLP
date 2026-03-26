@@ -1,7 +1,7 @@
 # Direct Trajectory Optimization
-
 import jax
 jax.config.update('jax_enable_x64', True)
+jax.config.update('jax_platform_name', 'cpu')
 import jax.numpy as jnp
 
 from pyoptsparse.pySNOPT.pySNOPT import SNOPT
@@ -12,7 +12,7 @@ import time
 from dataclasses import replace
 
 # Utilities
-from Lib.utilities import check_jacobian_fd_vs_ad, yaml_load, process_config, process_sparsity, prepare_prop_funcs, prepare_opt_funcs, prepare_sol, save_sol, save_OptimizerSol, load_OptimizerSol
+from Lib.utilities import yaml_load, process_config, process_sparsity, prepare_prop_funcs, prepare_opt_funcs, prepare_sol, save_sol, save_OptimizerSol, load_OptimizerSol
 
 # Math
 
@@ -41,7 +41,7 @@ if __name__ == "__main__":
     # 
     # Feedback Controller Types:
     #   true_state
-    #   estimated_state (ONLY WORKS WITH 1 SUB-ARC AND 2 DETAILED SAVE POINTS (ONE ON EITHER END OF THE ARC)... FOR NOW)
+    #   estimated_state
     #
     # Measurement Types: 
     #   position
@@ -50,14 +50,14 @@ if __name__ == "__main__":
     #   angles
     # ---------------------------------------------------------------------------
     folder_name = "L2_S-NRHO_to_L2_N-NRHO"
-    Problem_Type = "deterministic"
+    Problem_Type = "stochastic_gauss_zoh"
 
     Gain_Parametrization_Type = "arc_lqr"
     Feedback_Control_Type = "estimated_state"
-    Measurements = ("range","range-rate","angles")
+    Measurements = ("range","range-rate")
 
-    hot_start = False
-    hot_start_sol = "deterministic"
+    hot_start = True
+    hot_start_sol = "stochastic_gauss_zoh_estimated_state_range_range-rate"
     # ---------------------------------------------------------------------------
     file_name = Problem_Type
     if Problem_Type.lower() == 'stochastic_gauss_zoh': 
@@ -83,7 +83,7 @@ if __name__ == "__main__":
                   'Function precision': 1e-10,           # Keep a few (3 to 4) orders of magnitude above the integration tolerances to keep SNOPT from seeing noise
                   'Verify level': -1,
                   'Nonderivative linesearch': 0,
-                  'Major step limit': 1e0,              # (Lower to keep near guess) Limits the step size of the optimization variables (can help with convergence in some cases)
+                  'Major step limit': 1e-1,             # (Lower to keep near guess) Limits the step size of the optimization variables (can help with convergence in some cases)
                   'Elastic weight': 1.e4}
     # ---------------------------------------------------------------------------
 
@@ -96,12 +96,12 @@ if __name__ == "__main__":
     eom_e, propagators, iterators = prepare_prop_funcs(eoms_gen, models, propagator_gen, dyn_args, replace(cfg_args, N_save=2))
 
     # Optimization functions
-    vals, grad, sens = prepare_opt_funcs(Boundary_Conds, iterators, propagators, models, dyn_args, replace(cfg_args, N_save=2))
+    vals, grad, sens = prepare_opt_funcs(Boundary_Conds, iterators, propagators, models, Sys, dyn_args, replace(cfg_args, N_save=2))
 
 
     # Set up initial guess and hot starter
     print("Setting Up Initial Guess")
-    U_guess_key = 4
+    U_guess_key = 3
     U_arg_rand = jax.random.multivariate_normal(jax.random.PRNGKey(U_guess_key), mean = jnp.zeros(3,), cov = 1e-1*jnp.eye(3), shape=(cfg_args.N_arcs,))
     init_guess = {'U_arc_hst': U_arg_rand.flatten(), 
                   'X0': jnp.hstack([Boundary_Conds['X0_init'],1]), 
@@ -111,9 +111,9 @@ if __name__ == "__main__":
         init_guess['beta'] = Boundary_Conds['beta_min']
     if Problem_Type == 'stochastic_gauss_zoh':
         if Gain_Parametrization_Type.lower() == 'arc_lqr':
-            init_guess['gain_weights'] = 1e-3*jnp.ones(2*cfg_args.N_arcs)
+            init_guess['gain_weights'] = 1e-4*jnp.ones(2*cfg_args.N_arcs)
         elif Gain_Parametrization_Type.lower() == 'fulltraj_lqr':
-            gain_weights_guess = 1e-4*jnp.ones((cfg_args.N_arcs+1,2))
+            gain_weights_guess = 1e-6*jnp.ones((cfg_args.N_arcs+1,2))
             #gain_weights_guess = gain_weights_guess.at[(1,-1),:].set(1e0)
             init_guess['gain_weights'] = gain_weights_guess.flatten()
     if hot_start:
@@ -138,7 +138,7 @@ if __name__ == "__main__":
             gain_weight_ln = 2*cfg_args.N_arcs
         elif Gain_Parametrization_Type.lower() == 'fulltraj_lqr':
             gain_weight_ln = 2*(cfg_args.N_arcs+1)
-        optprop.addVarGroup('gain_weights', gain_weight_ln, "c", value = init_guess['gain_weights'], lower = 1e-5)
+        optprop.addVarGroup('gain_weights', gain_weight_ln, "c", value = init_guess['gain_weights'], lower = 1e-7)
     if cfg_args.free_phasing:
         optprop.addVarGroup('alpha', 1, "c", value = init_guess['alpha'], lower = Boundary_Conds['alpha_min'], upper = Boundary_Conds['alpha_max'])
         optprop.addVarGroup('beta', 1, "c", value = init_guess['beta'], lower = Boundary_Conds['beta_min'], upper = Boundary_Conds['beta_max'])
