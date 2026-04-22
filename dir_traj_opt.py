@@ -2,7 +2,6 @@
 import jax
 jax.config.update('jax_enable_x64', True)
 jax.config.update('jax_platform_name', 'cpu')
-import jax.numpy as jnp
 
 from pyoptsparse.pySNOPT.pySNOPT import SNOPT
 from pyoptsparse import Optimization
@@ -12,7 +11,7 @@ import time
 from dataclasses import replace
 
 # Utilities
-from Lib.utilities import yaml_load, process_config, process_sparsity, prepare_prop_funcs, prepare_opt_funcs, prepare_sol, save_sol, save_OptimizerSol, load_OptimizerSol
+from Lib.utilities import yaml_load, process_config, process_sparsity, prepare_prop_funcs, prepare_opt_funcs, prepare_sol, save_sol, save_OptimizerSol, load_OptimizerSol, make_InitGuess
 
 # Math
 
@@ -30,44 +29,54 @@ if __name__ == "__main__":
     #   L2_S-HO_to_L1_Lyap
     #   L2_S-HO_to_L4_N-Axial
     #   Sandbox
-    # 
+    folder_name = "L2_S-HO_to_L1_Lyap"
+
     # Problem Types:
     #   deterministic
     #   stochastic_gauss_zoh
-    # 
+    Problem_Type = "stochastic_gauss_zoh"
+
     # Gain Parameterization Types:
     #   arc_lqr
     #   fulltraj_lqr
-    # 
+    Gain_Parametrization_Type = "fulltraj_lqr"
+
     # Feedback Controller Types:
     #   true_state
     #   estimated_state
-    #
-    # Measurement Types: 
+    Feedback_Control_Type = "estimated_state" 
+
+    # Measurement Types (only applies for estimated state feedback): 
     #   position
     #   range
     #   range-rate
     #   angles
-    # ---------------------------------------------------------------------------
-    folder_name = "L2_S-NRHO_to_L2_N-NRHO"
-    Problem_Type = "stochastic_gauss_zoh"
+    Measurements = ("range","range-rate","angles")
 
-    Gain_Parametrization_Type = "arc_lqr"
-    Feedback_Control_Type = "estimated_state"
-    Measurements = ("range","range-rate")
+    # Hot Start Solutions:
+    #   None
+    #   deterministic
+    #   stochastic_gauss_zoh_true_state
+    #   stochastic_gauss_zoh_estimated_state_{measurements}
+    Hot_Start_Sol = "stochastic_gauss_zoh_estimated_state_range_range-rate_angles"
 
-    hot_start = True
-    hot_start_sol = "stochastic_gauss_zoh_estimated_state_range_range-rate"
+    # Node Resampling (only applies if hot start solution is not None):
+    #   None
+    #   burns
+    #   ends_burns
+    Node_Resampling = None
     # ---------------------------------------------------------------------------
+
+    # Directory and File Names --------------------------------------------------
     file_name = Problem_Type
-    if Problem_Type.lower() == 'stochastic_gauss_zoh': 
+    if Problem_Type.lower() == 'stochastic_gauss_zoh':          
         file_name += "_" + Feedback_Control_Type
         if Feedback_Control_Type.lower() == 'estimated_state':
             file_name += "_" + "_".join(Measurements)
 
     config_file = r"Scenarios/"+folder_name+"/config.yaml"
 
-    hot_start_file = r"Scenarios/"+folder_name+"/"+hot_start_sol+"_sol.h5"
+    hot_start_file = r"Scenarios/"+folder_name+"/"+Hot_Start_Sol+"_sol.h5" if Hot_Start_Sol else None
     save_file = r"Plotting/Scenarios/"+folder_name+"/"+file_name+"/"
 
     OptimSol_save_file = r"Scenarios/"+folder_name+"/"+file_name+"_sol.h5"
@@ -77,13 +86,13 @@ if __name__ == "__main__":
     optOptions = {'Major optimality tolerance': 1e-5,   # Keep here
                   'Major feasibility tolerance': 1e-6,  # Keep here - Changes how tightly the constraints are met
                   'Minor feasibility tolerance': 1e-6,  # Similar to above but for the QP sub-problem
-                  'Major iterations limit': 1000,
+                  'Major iterations limit': 0,
                   'Partial prince': 1,                  # Keep here - Impacts the number of variales to examine in the gradient search (larger is fewer)
                   'Linesearch tolerance': .99,          # Keep here - Sets the level of accuracy to find in the quadratic sub problem
-                  'Function precision': 1e-10,           # Keep a few (3 to 4) orders of magnitude above the integration tolerances to keep SNOPT from seeing noise
-                  'Verify level': -1,
+                  'Function precision': 1e-10,          # Keep a few (2 to 3) orders of magnitude above the integration tolerances to keep SNOPT from seeing noise
+                  'Verify level': -1,                   # Used to verify gradients (-1 for don't verify)
                   'Nonderivative linesearch': 0,
-                  'Major step limit': 1e-1,             # (Lower to keep near guess) Limits the step size of the optimization variables (can help with convergence in some cases)
+                  'Major step limit': 1e0 if hot_start_file is None else 1e-3,  # (Lower to keep near guess) Limits the step size of the optimization variables (can help with convergence in some cases)
                   'Elastic weight': 1.e4}
     # ---------------------------------------------------------------------------
 
@@ -98,28 +107,10 @@ if __name__ == "__main__":
     # Optimization functions
     vals, grad, sens = prepare_opt_funcs(Boundary_Conds, iterators, propagators, models, Sys, dyn_args, replace(cfg_args, N_save=2))
 
-
     # Set up initial guess and hot starter
     print("Setting Up Initial Guess")
-    U_guess_key = 3
-    U_arg_rand = jax.random.multivariate_normal(jax.random.PRNGKey(U_guess_key), mean = jnp.zeros(3,), cov = 1e-1*jnp.eye(3), shape=(cfg_args.N_arcs,))
-    init_guess = {'U_arc_hst': U_arg_rand.flatten(), 
-                  'X0': jnp.hstack([Boundary_Conds['X0_init'],1]), 
-                  'Xf': jnp.hstack([Boundary_Conds['Xf_init'],0.95])}
-    if cfg_args.free_phasing:
-        init_guess['alpha'] = Boundary_Conds['alpha_min']
-        init_guess['beta'] = Boundary_Conds['beta_min']
-    if Problem_Type == 'stochastic_gauss_zoh':
-        if Gain_Parametrization_Type.lower() == 'arc_lqr':
-            init_guess['gain_weights'] = 1e-4*jnp.ones(2*cfg_args.N_arcs)
-        elif Gain_Parametrization_Type.lower() == 'fulltraj_lqr':
-            gain_weights_guess = 1e-6*jnp.ones((cfg_args.N_arcs+1,2))
-            #gain_weights_guess = gain_weights_guess.at[(1,-1),:].set(1e0)
-            init_guess['gain_weights'] = gain_weights_guess.flatten()
-    if hot_start:
-        sol_hot = load_OptimizerSol(hot_start_file)
-        for key in sol_hot.keys():
-            init_guess[key] = sol_hot[key] 
+    U_rng_vals = {'key': 14, 'var': 1e-3}
+    init_guess, dyn_args = make_InitGuess(Problem_Type, Gain_Parametrization_Type, Node_Resampling, Boundary_Conds, cfg_args, dyn_args, U_rng_vals, hot_start_file)
 
 
     # Process Sparsity for SNOPT
@@ -134,11 +125,7 @@ if __name__ == "__main__":
     optprop.addVarGroup('X0', 7, "c", value = init_guess['X0'], lower=[-10, -10, -10, -10, -10, -10, 1e-1], upper=[10, 10, 10, 10, 10, 10, 1])
     optprop.addVarGroup('Xf', 7, "c", value = init_guess['Xf'], lower=[-10, -10, -10, -10, -10, -10, 1e-1], upper=[10, 10, 10, 10, 10, 10, 1])
     if Problem_Type == 'stochastic_gauss_zoh':
-        if Gain_Parametrization_Type.lower() == 'arc_lqr':
-            gain_weight_ln = 2*cfg_args.N_arcs
-        elif Gain_Parametrization_Type.lower() == 'fulltraj_lqr':
-            gain_weight_ln = 2*(cfg_args.N_arcs+1)
-        optprop.addVarGroup('gain_weights', gain_weight_ln, "c", value = init_guess['gain_weights'], lower = 1e-7)
+        optprop.addVarGroup('gain_weights', cfg_args.N_arcs*2, "c", value = init_guess['gain_weights'], lower = 1e-6)
     if cfg_args.free_phasing:
         optprop.addVarGroup('alpha', 1, "c", value = init_guess['alpha'], lower = Boundary_Conds['alpha_min'], upper = Boundary_Conds['alpha_max'])
         optprop.addVarGroup('beta', 1, "c", value = init_guess['beta'], lower = Boundary_Conds['beta_min'], upper = Boundary_Conds['beta_max'])
@@ -162,7 +149,7 @@ if __name__ == "__main__":
     print("Elapsed Time: %.3f" % (time.time() - start_time))
 
     # Save Optimization Solution
-    save_OptimizerSol(sol, cfg_args, OptimSol_save_file)
+    save_OptimizerSol(sol, cfg_args, dyn_args, OptimSol_save_file)
 
     # Analyze and Save Results
     allData = prepare_sol(sol, Sys, Boundary_Conds, propagators, models, dyn_args, cfg_args)

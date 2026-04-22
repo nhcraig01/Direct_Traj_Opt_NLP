@@ -10,11 +10,11 @@ integration:
 traj_parameters:
   control_arcs: 40
   sub_arcs: 1
-  save_pts_detailed: 21
+  save_pts_detailed: 11
   MC_trials: 1000
 boundary_conditions:
   t0: "2026-01-01T00:00:00"
-  tf: "2026-02-01T00:00:00"
+  tf: "2026-01-31T00:00:00"
   tf_T: 0.5
   initial_orbit:
     family_path: '../CR3BP_dev/EarthMoon_System/L1_N_Halo.h5'
@@ -39,7 +39,7 @@ uncertainty:
   covariance:
     initial_dispersion:
       pos_sig: 10
-      vel_sig: .001
+      vel_sig: .01
       mass_sig: 1.e-12
     initial_error:
       pos_sig: .01
@@ -47,7 +47,7 @@ uncertainty:
       mass_sig: 1.e-12
     post_insert_target_total:
       pos_sig: 50
-      vel_sig: .001
+      vel_sig: .01
       mass_sig: 60
   acc_sig: 5.e-12
   measurement:

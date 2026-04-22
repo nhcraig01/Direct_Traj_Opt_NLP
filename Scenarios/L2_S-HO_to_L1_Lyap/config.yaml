@@ -6,10 +6,10 @@ dynamics:
   sys_param_file: '../CR3BP_dev/EarthMoon_System/EMsys.yaml'
 integration:
   a_tol: 1.e-12
-  r_tol: 1.e-10
+  r_tol: 1.e-12
 traj_parameters:
   control_arcs: 40
-  sub_arcs: 5
+  sub_arcs: 1
   save_pts_detailed: 11
   MC_trials: 1000
 boundary_conditions:
@@ -27,10 +27,10 @@ boundary_conditions:
   type: "free"
   alpha:
     min: .0
-    max: .1
+    max: 1.0
   beta:
     min: .0
-    max: .1
+    max: 1.0
 engine:
   m0: 200
   Isp: 3337
@@ -47,7 +47,7 @@ uncertainty:
       mass_sig: 1.e-12
     post_insert_target_total:
       pos_sig: 50
-      vel_sig: .001
+      vel_sig: .01
       mass_sig: 60
   acc_sig: 5.e-12
   measurement:

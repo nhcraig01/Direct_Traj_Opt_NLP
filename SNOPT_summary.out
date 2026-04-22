@@ -24,28 +24,28 @@
  
 
  Major Minors     Step   nCon Feasible  Optimal  MeritFunction     nS Penalty
-     0    250               1  1.6E-03  1.4E+01  1.5715431E+01    152           r
+     0    389               1 (2.2E-08) 7.0E-01  4.5320479E-01     96           r
  
  SNOPTC EXIT  30 -- resource limit error
  SNOPTC INFO  32 -- major iteration limit reached
 
  Problem name                 Forward
- No. of iterations                 250   Objective            1.5715430645E+01
+ No. of iterations                 389   Objective            4.5320478621E-01
  No. of major iterations             0   Linear    obj. term  0.0000000000E+00
- Penalty parameter           0.000E+00   Nonlinear obj. term  1.5715430645E+01
+ Penalty parameter           0.000E+00   Nonlinear obj. term  4.5320478621E-01
  User function calls (total)         1   Calls with modes 1,2 (known g)      1
- No. of superbasics                152   No. of basic nonlinears            29
- No. of degenerate steps             4   Percentage                       1.60
- Max x                     128 1.0E+00   Max pi                     10 3.6E+02
- Max Primal infeas         255 1.6E-03   Max Dual infeas           104 1.3E+07
- Nonlinear constraint violn    1.6E-03
+ No. of superbasics                 96   No. of basic nonlinears            43
+ No. of degenerate steps             6   Percentage                       1.54
+ Max x                     121 1.1E+00   Max pi                     20 2.2E+04
+ Max Primal infeas         225 2.5E-08   Max Dual infeas           134 2.3E+04
+ Nonlinear constraint violn    2.5E-08
  
  
 
  Solution printed on file  18
  
  Time for MPS input                             0.00 seconds
- Time for solving problem                      14.73 seconds
+ Time for solving problem                      28.71 seconds
  Time for solution output                       0.00 seconds
- Time for constraint functions                 14.71 seconds
+ Time for constraint functions                 28.69 seconds
  Time for objective function                    0.00 seconds

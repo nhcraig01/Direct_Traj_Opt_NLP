@@ -5,12 +5,12 @@ dynamics:
   type: "CR3BP"
   sys_param_file: '../CR3BP_dev/EarthMoon_System/EMsys.yaml'
 integration:
-  a_tol: 1.e-13
-  r_tol: 1.e-13
+  a_tol: 1.e-12
+  r_tol: 1.e-12
 traj_parameters:
   control_arcs: 40
   sub_arcs: 1
-  save_pts_detailed: 51
+  save_pts_detailed: 21
   MC_trials: 1000
 boundary_conditions:
   t0: "2026-01-01T00:00:00"
@@ -18,19 +18,19 @@ boundary_conditions:
   tf_T: 0.5
   initial_orbit:
     family_path: '../CR3BP_dev/EarthMoon_System/L2_S_Halo.h5'
-    Orb_ID: 150
+    Orb_ID: 100
     Start_Idx: 0
   final_orbit:
-    family_path: '../CR3BP_dev/EarthMoon_System/L4_N_Axial.h5'
-    Orb_ID: 150
+    family_path: '../CR3BP_dev/EarthMoon_System/L1_S_Halo.h5'
+    Orb_ID: 100
     Start_Idx: 0
   type: "free"
   alpha:
-    min: .0
-    max: .5
+    min: 0.0
+    max: 0.5
   beta:
-    min: .0
-    max: .5
+    min: 0.0
+    max: 0.5
 engine:
   m0: 200
   Isp: 3337
@@ -47,7 +47,7 @@ uncertainty:
       mass_sig: 1.e-12
     post_insert_target_total:
       pos_sig: 50
-      vel_sig: .001
+      vel_sig: .01
       mass_sig: 60
   acc_sig: 5.e-12
   measurement:

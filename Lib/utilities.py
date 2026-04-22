@@ -44,9 +44,9 @@ def load_family(input_loc: str) -> dict:
     return family_data
 
 
-# -----
-# Misc
-# -----
+# --------------------------------------------
+# Initialization and Configuration Processing
+# --------------------------------------------
 
 def process_sparsity(grad_nonsparse):
     grad_sparse = {}
@@ -245,12 +245,7 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str, gain_p
     meas_params = {'r_obs': r_obs, 'pos_sig': pos_sig, 'range_sig': range_sig, 'rate_sig': rate_sig, 'angles_sig': angles_sig}
 
     meas_model = measurement_model_builder(measurements, meas_params)
-
-    meas_model['h_vmap'] = jax.vmap(meas_model['h_eval'], in_axes=(0,))
-    meas_model['H_vmap'] = jax.vmap(meas_model['H_eval'], in_axes=(0,))
-    meas_model['P_v_vmap'] = jax.vmap(meas_model['P_v_eval'], in_axes=(0,))
     meas_dim = meas_model['n_meas']
-
     models['measurements'] = meas_model
 
     # Static configuration arguments
@@ -308,6 +303,201 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str, gain_p
 
     return Sys, models, Boundary_Conds, cfg_args, dyn_args
 
+def make_InitGuess(Problem_Type, Gain_Parametrization_Type, Node_Resampling, Boundary_Conds, cfg_args, dyn_args, U_rng_vals, hot_start_file):
+    # Make default initial guess from inputs
+    U_arc_rand = jax.random.multivariate_normal(
+        jax.random.PRNGKey(U_rng_vals['key']),
+        mean = jnp.zeros(3,),
+        cov = U_rng_vals['var'] * jnp.eye(3),
+        shape = (cfg_args.N_arcs,))
+
+    init_guess = {
+        'U_arc_hst': U_arc_rand.flatten(),
+        'X0': jnp.hstack([Boundary_Conds['X0_init'], 1]),
+        'Xf': jnp.hstack([Boundary_Conds['Xf_init'], 0.95])}
+
+    if cfg_args.free_phasing:
+        init_guess['alpha'] = Boundary_Conds['alpha_min']
+        init_guess['beta'] = Boundary_Conds['beta_min']
+
+    if Problem_Type == 'stochastic_gauss_zoh':
+        if Gain_Parametrization_Type.lower() == 'arc_lqr':
+            init_guess['gain_weights'] = 1e-4 * jnp.ones(2 * cfg_args.N_arcs)
+        elif Gain_Parametrization_Type.lower() == 'fulltraj_lqr':
+            gain_weights_guess = 1e-5 * jnp.ones((cfg_args.N_arcs, 2))
+            # gain_weights_guess = gain_weights_guess.at[[0,1,-1],:].set(1e-4)
+            init_guess['gain_weights'] = gain_weights_guess.flatten()
+
+    # If hot start file provided, interpolate control and weight histories onto current time grid and use as initial guess
+    if hot_start_file is not None:
+        # Load and set main initial guess values
+        sol_hot = load_OptimizerSol(hot_start_file)
+        for key in sol_hot.keys():
+            init_guess[key] = sol_hot[key]
+
+        dyn_args['t_node_bound'] = jnp.asarray(sol_hot['t_node_bound'])
+        
+        t_node_bound_hot = jnp.asarray(sol_hot['t_node_bound'])
+        U_arc_hst_hot = jnp.asarray(sol_hot['U_arc_hst']).reshape(-1, 3)
+
+        t_node_bound = jnp.asarray(dyn_args['t_node_bound'])
+        U_arc_hst = jnp.zeros((cfg_args.N_arcs, 3))
+
+        # Resample nodes according to method and hot start control solution
+        if Node_Resampling is not None:
+            t_node_bound = node_EpochSampling(t_node_bound_hot, U_arc_hst_hot, cfg_args.N_nodes, Node_Resampling)
+            dyn_args['t_node_bound'] = t_node_bound
+
+        # Interpolate control history onto new time arrays
+        for i in range(t_node_bound.shape[0] - 1):
+            t_i = t_node_bound[i]
+
+            # Only assign if t_i lies inside the hot-start time support
+            if t_i < t_node_bound_hot[-1]:
+                # Find old arc index k such that
+                # t_node_bound_hot[k] <= t_i < t_node_bound_hot[k+1]
+                k = jnp.searchsorted(t_node_bound_hot, t_i, side='right') - 1
+
+                # Safety clamp in case of tiny numerical edge cases near zero
+                k = jnp.max(jnp.array([0, jnp.min(jnp.array([k, U_arc_hst_hot.shape[0] - 1]))]))
+
+                # Assign old ZOH control value
+                U_arc_hst = U_arc_hst.at[i, :].set(U_arc_hst_hot[k, :])
+        init_guess['U_arc_hst'] = U_arc_hst.flatten()
+
+    return init_guess, dyn_args
+
+def node_EpochSampling(t_node_bound, U_arc_hst, N_nodes, Node_Resampling):
+    """ Sample N_nodes epochs between t0 and tf (inclusive) such that more nodes are concentrated near the specified areas
+    """
+    t_node_bound = jnp.asarray(t_node_bound)
+    U_arc_hst = jnp.asarray(U_arc_hst)
+
+    # Dense time grid
+    t_dense = jnp.linspace(t_node_bound[0], t_node_bound[-1], 1000)
+
+    # Arcwise burn/coast density
+    if Node_Resampling == 'burns':
+        rho_arc = density_arcwise_burns(U_arc_hst)
+    elif Node_Resampling == 'ends_burns':
+        rho_arc = density_arcwise_ends_burns(U_arc_hst)
+
+    # Local smoothing scale based on arc width
+    dt_smooth = 1.5*(t_node_bound[1]-t_node_bound[0])
+
+    # Dense smooth density
+    rho_dense = smoothed_zoh_density(t_dense, t_node_bound, rho_arc, dt_smooth)
+
+    # Cumulative trapezoidal integral
+    dt_seg = jnp.diff(t_dense)
+    rho_mid = 0.5 * (rho_dense[:-1] + rho_dense[1:])
+    S_dense = jnp.concatenate([jnp.array([0.0]),jnp.cumsum(rho_mid * dt_seg)])
+    S_tot = S_dense[-1]
+
+    # Uniform sampling in cumulative-density space
+    S_sample = jnp.linspace(0.0, S_tot, N_nodes)
+
+    # Invert cumulative map
+    t_node_sampled = jnp.interp(S_sample, S_dense, t_dense)
+
+    # Enforce exact endpoints
+    t_node_sampled = t_node_sampled.at[0].set(t_node_bound[0])
+    t_node_sampled = t_node_sampled.at[-1].set(t_node_bound[-1])
+
+    return t_node_sampled
+
+def density_arcwise_burns(U_arc_hst, U_thresh: float = 1e-3, rho_burn: float = 1.0, rho_coast: float = 0.15):
+    U_mag_hst = jnp.linalg.norm(U_arc_hst, axis=1)
+    burn_mask = U_mag_hst > U_thresh
+    rho_arc = jnp.where(burn_mask, rho_burn, rho_coast)
+    return rho_arc
+
+def density_arcwise_ends_burns(U_arc_hst, U_thresh: float = 1e-3, rho_burn: float = 1.0, rho_coast: float = 0.15, rho_ends: float = 0.5, frac_ends: float = 0.1):
+    
+    # Number of arcs
+    N = U_arc_hst.shape[0]
+
+    # Number of arcs to boost at start/end
+    n_ends = jnp.ceil(frac_ends*N).astype(int)
+
+    # Density added to start and end of transfer
+    rho_arc = jnp.zeros((N,))
+    rho_arc = rho_arc.at[:n_ends].set(rho_ends)
+    rho_arc = rho_arc.at[-n_ends:].set(rho_ends)
+    
+    # More density added around burns to keep solution somewhat valid. Base density added on interior coasting arcs
+    U_mag_hst = jnp.linalg.norm(U_arc_hst, axis=1)
+    burn_mask = U_mag_hst > U_thresh
+    rho_arc = jnp.where(burn_mask, rho_burn, jnp.maximum(rho_arc, rho_coast))
+
+    return rho_arc
+
+def smoothed_zoh_density(t_dense, t_node_bound, rho_arc, dt_smooth: float = 0.05):
+    """ Evaluate a smoothed density history over a dense time grid.
+    """
+    t_dense = jnp.asarray(t_dense)
+    t_node_bound = jnp.asarray(t_node_bound)
+    rho_arc = jnp.asarray(rho_arc)
+
+    rho_raw = interp_zoh(t_dense, t_node_bound, rho_arc)
+
+    # Interior node times are possible transition locations
+    t_trans = t_node_bound[1:-1]
+    rho_left = rho_arc[:-1]
+    rho_right = rho_arc[1:]
+
+    correction = jnp.zeros_like(t_dense)
+
+    for j in range(t_trans.shape[0]):
+        tk = t_trans[j]
+        rl = rho_left[j]
+        rr = rho_right[j]
+
+        # If no actual jump, skip
+        if rl == rr:
+            continue
+
+        # Case 1: Density increases 
+        if rr > rl:
+            z = (t_dense - (tk - dt_smooth)) / dt_smooth
+            phi = smoothstep01(z)
+
+            # Desired smooth ramp value in the window
+            rho_smooth = rl + phi * (rr - rl)
+
+            # Raw ZOH value in that same window is just rl
+            in_window = (t_dense >= (tk - dt_smooth)) & (t_dense < tk)
+
+            correction = correction + jnp.where(in_window, rho_smooth - rl, 0.0)
+
+        # Case 2: Density decreases
+        else:
+            z = (t_dense - tk) / dt_smooth
+            phi = smoothstep01(z)
+
+            # Desired smooth ramp value in the window
+            rho_smooth = rl + phi * (rr - rl)
+
+            # Raw ZOH value in that same window is just rr for t >= tk
+            # Wait carefully: because rho_raw jumps at tk, on [tk, tk+dt] it equals rr.
+            in_window = (t_dense >= tk) & (t_dense < (tk + dt_smooth))
+
+            correction = correction + jnp.where(in_window, rho_smooth - rr, 0.0)
+
+    rho_dense = rho_raw + correction
+    return rho_dense
+
+def interp_zoh(x, xp, fp):
+    """ Interpolates the value of a piecewise constant function defined by (xp, fp) at the points x.
+    This is essentially a zero-order hold interpolation.
+    """
+    indices = jnp.searchsorted(xp, x, side='right') - 1
+    indices = jnp.clip(indices, 0, fp.shape[0] - 1)
+    return fp[indices]
+
+def smoothstep01(x):
+    x = jnp.clip(x, 0, 1)
+    return x * x * (3 - 2 * x)
 
 # ------------------------------------
 # Propagation and Optimizer Functions
@@ -499,11 +689,12 @@ def save_sol(output, Sys, save_loc: str, dyn_args, cfg_args):
     savemat(save_loc+"Sys.mat",Sys)
     return
 
-def save_OptimizerSol(solution, cfg_arg, save_loc: str):
+def save_OptimizerSol(solution, cfg_arg, dyn_args, save_loc: str):
     with h5py.File(save_loc, "w") as f:
         f.create_dataset("X0", data=solution.xStar['X0'])
         f.create_dataset("Xf", data=solution.xStar['Xf'])
         f.create_dataset("U_arc_hst", data=solution.xStar['U_arc_hst'])
+        f.create_dataset("t_node_bound", data=dyn_args['t_node_bound'])
         if cfg_arg.free_phasing:
             f.create_dataset("alpha", data=solution.xStar['alpha'])
             f.create_dataset("beta", data=solution.xStar['beta'])
@@ -517,6 +708,7 @@ def load_OptimizerSol(input_loc: str) -> dict:
         sol["X0"] = f["X0"][:]
         sol["Xf"] = f["Xf"][:]
         sol["U_arc_hst"] = f["U_arc_hst"][:]
+        sol["t_node_bound"] = f["t_node_bound"][:]
         if "alpha" in f.keys():
             sol["alpha"] = f["alpha"][:]
         if "beta" in f.keys():
