@@ -383,7 +383,7 @@ def node_EpochSampling(t_node_bound, U_arc_hst, N_nodes, Node_Resampling):
         rho_arc = density_arcwise_ends_burns(U_arc_hst)
 
     # Local smoothing scale based on arc width
-    dt_smooth = 1.5*(t_node_bound[1]-t_node_bound[0])
+    dt_smooth = 2*(t_node_bound[1]-t_node_bound[0])
 
     # Dense smooth density
     rho_dense = smoothed_zoh_density(t_dense, t_node_bound, rho_arc, dt_smooth)
@@ -406,13 +406,13 @@ def node_EpochSampling(t_node_bound, U_arc_hst, N_nodes, Node_Resampling):
 
     return t_node_sampled
 
-def density_arcwise_burns(U_arc_hst, U_thresh: float = 1e-3, rho_burn: float = 1.0, rho_coast: float = 0.15):
+def density_arcwise_burns(U_arc_hst, U_thresh: float = 1e-3, rho_burn: float = 1.0, rho_coast: float = 0.1):
     U_mag_hst = jnp.linalg.norm(U_arc_hst, axis=1)
     burn_mask = U_mag_hst > U_thresh
     rho_arc = jnp.where(burn_mask, rho_burn, rho_coast)
     return rho_arc
 
-def density_arcwise_ends_burns(U_arc_hst, U_thresh: float = 1e-3, rho_burn: float = 1.0, rho_coast: float = 0.15, rho_ends: float = 0.5, frac_ends: float = 0.1):
+def density_arcwise_ends_burns(U_arc_hst, U_thresh: float = 1e-3, rho_burn: float = 1.0, rho_coast: float = 0.1, rho_ends: float = 0.5, frac_ends: float = 0.1):
     
     # Number of arcs
     N = U_arc_hst.shape[0]

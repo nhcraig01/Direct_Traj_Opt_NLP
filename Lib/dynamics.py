@@ -464,15 +464,6 @@ def measurement_model_builder(measurements, params):
                     [v_y],
                     [v_z],
                     [m]])
-    # Estimated state
-    rhat_x, rhat_y, rhat_z, vhat_x, vhat_y, vhat_z, mhat = sp.symbols('rhat_x, rhat_y, rhat_z, vhat_x, vhat_y, vhat_z, mhat', real=True)
-    Xhat_sym = sp.Matrix([[rhat_x],
-                        [rhat_y],
-                        [rhat_z],
-                        [vhat_x],
-                        [vhat_y],
-                        [vhat_z],
-                        [mhat]])
     
     # Observer position
     obs_x, obs_y, obs_z = params['r_obs']
@@ -491,105 +482,64 @@ def measurement_model_builder(measurements, params):
     pos = sp.Matrix([[r_x],
                           [r_y],
                           [r_z]])
-    pos_jac = sp.Matrix.hstack(sp.eye(3), sp.zeros(3,4))
     pos_cov = sp.diag(params['pos_sig']**2, params['pos_sig']**2, params['pos_sig']**2)
-    pos_cov_noise_gen = pos_cov
-
 
     # Range Measurement Set Up
     rng = sp.sqrt((rel_pos.T @ rel_pos)[0])
-    rng_jac = sp.Matrix.hstack((rel_pos.T / rng), sp.zeros(1,4))
     rng_cov = sp.diag(params['range_sig']**2)
-    rng_cov_noise_gen = rng_cov
-
 
     # Range_Rate Measurement Set Up 
     rng_rate = (rel_pos.T @ rel_vel)[0] / rng
-    rng_rate_jac = sp.Matrix.hstack((rel_vel.T / rng - (rel_pos.T @ rel_vel)[0] * rel_pos.T / rng**3), (rel_pos.T / rng), sp.zeros(1,1))
     rng_rate_cov = sp.diag(params['rate_sig']**2)
-    rng_rate_cov_noise_gen = rng_rate_cov
 
-
-    # Angles Measurement Set Up Using my Poiting Vector Method
+    # Angles Measurement Set Up
     theta = sp.atan2(rel_pos[1], rel_pos[0])
     phi = sp.asin(rel_pos[2] / rng)
-    rel_pos_hat = sp.Matrix([[rhat_x - obs_x],
-                             [rhat_y - obs_y],
-                             [rhat_z - obs_z]])
-    rng_hat = sp.sqrt((rel_pos_hat.T @ rel_pos_hat)[0])
-
-    PV = rng_hat*sp.Matrix([[sp.cos(phi)*sp.cos(theta)],
-                            [sp.cos(phi)*sp.sin(theta)],
-                            [sp.sin(phi)]])
-    V1 = rng_hat*sp.Matrix([[-sp.cos(theta)*sp.sin(phi)],
-                            [-sp.sin(theta)*sp.sin(phi)],
-                            [sp.cos(phi)]])
-    V2 = rng_hat*sp.Matrix([[sp.sin(theta)],
-                            [-sp.cos(theta)],
-                            [0]])
-    PV_jac = sp.Matrix.hstack(sp.eye(3), sp.zeros(3,4))
-    
-    rng_infl_sigma = 1.e4 * params['angles_sig']
-    rng_noise_gen_sigma = 1.e-5 * params['angles_sig']
-    A = sp.Matrix.hstack(params['angles_sig']*V1, params['angles_sig']*V2, rng_infl_sigma*PV)
-    PV_cov = A @ A.T
-    A_noise_gen = sp.Matrix.hstack(params['angles_sig']*V1, params['angles_sig']*V2, rng_noise_gen_sigma*PV)
-    PV_cov_noise_gen = A_noise_gen @ A_noise_gen.T
+    angles = sp.Matrix([[theta],
+                        [phi]])
+    angles_cov = sp.diag(params['angles_sig']**2, params['angles_sig']**2)
 
     # Build the measurement model based on selected measurements
     meas_parts = []
-    jac_parts = []
     cov_blocks = []
-    cov_noise_gen_blocks = []
     for meas in measurements: 
         key = meas.lower()
         if key in ("position", "pos"):
             meas_parts.append(pos)
-            jac_parts.append(pos_jac)
             cov_blocks.append(pos_cov)
-            cov_noise_gen_blocks.append(pos_cov_noise_gen)
         elif key in ("range", "rng"):
             meas_parts.append(sp.Matrix([[rng]]))
-            jac_parts.append(rng_jac)
             cov_blocks.append(rng_cov)
-            cov_noise_gen_blocks.append(rng_cov_noise_gen)
         elif key in ("range-rate", "rng-rate", "rate"):
             meas_parts.append(sp.Matrix([[rng_rate]]))
-            jac_parts.append(rng_rate_jac)
             cov_blocks.append(rng_rate_cov)
-            cov_noise_gen_blocks.append(rng_rate_cov_noise_gen)
         elif key in ("angles", "ang"):
-            meas_parts.append(PV)
-            jac_parts.append(PV_jac)
-            cov_blocks.append(PV_cov)
-            cov_noise_gen_blocks.append(PV_cov_noise_gen)
+            meas_parts.append(angles)
+            cov_blocks.append(angles_cov)
         else:
             raise ValueError(f"Measurement type '{meas}' not recognized.")
     
     meas_vec = sp.Matrix.vstack(*meas_parts)
-    meas_jac = sp.Matrix.vstack(*jac_parts)
     meas_cov = sp.diag(*cov_blocks)
-    meas_cov_noise_gen = sp.diag(*cov_noise_gen_blocks)
 
     n_state = int(X_sym.shape[0])
     n_meas = int(meas_vec.shape[0])
 
-    h_eval_raw = sp.lambdify((X_sym, Xhat_sym), meas_vec, 'jax')
-    H_eval_raw = sp.lambdify((X_sym, Xhat_sym), meas_jac, 'jax')
-    P_v_eval_raw = sp.lambdify((X_sym, Xhat_sym), meas_cov, 'jax')
-    P_v_eval_raw_noise_gen = sp.lambdify((X_sym, Xhat_sym), meas_cov_noise_gen, 'jax')
+    meas_jac = meas_vec.jacobian(X_sym)
 
-    h_eval = lambda x, xhat: jnp.reshape(h_eval_raw(x, xhat), (n_meas,))
-    h_vmap = jax.vmap(h_eval, in_axes=(0,0))
-    H_eval = lambda x, xhat: jnp.reshape(H_eval_raw(x, xhat), (n_meas, n_state))
-    H_vmap = jax.vmap(H_eval, in_axes=(0,0))
-    P_v_eval = lambda x, xhat: jnp.reshape(P_v_eval_raw(x, xhat), (n_meas, n_meas))
-    P_v_vmap = jax.vmap(P_v_eval, in_axes=(0,0))
-    P_v_noise_gen_eval = lambda x, xhat: jnp.reshape(P_v_eval_raw_noise_gen(x, xhat), (n_meas, n_meas))
-    P_v_noise_gen_vmap = jax.vmap(P_v_noise_gen_eval, in_axes=(0,0))
+    h_eval_raw = sp.lambdify((X_sym,), meas_vec, 'jax')
+    H_eval_raw = sp.lambdify((X_sym,), meas_jac, 'jax')
+    P_v_eval_raw = sp.lambdify((X_sym,), meas_cov, 'jax')
+
+    h_eval = lambda x: jnp.reshape(h_eval_raw(x), (n_meas,))
+    h_vmap = jax.vmap(h_eval, in_axes=0)
+    H_eval = lambda x: jnp.reshape(H_eval_raw(x), (n_meas, n_state))
+    H_vmap = jax.vmap(H_eval, in_axes=0)
+    P_v_eval = lambda x: jnp.reshape(P_v_eval_raw(x), (n_meas, n_meas))
+    P_v_vmap = jax.vmap(P_v_eval, in_axes=0)
 
     meas_model = {'h_eval': h_eval, 'H_eval': H_eval, 'P_v_eval': P_v_eval, 'n_meas': n_meas,
-                  'h_vmap': h_vmap, 'H_vmap': H_vmap, 'P_v_vmap': P_v_vmap, 'P_v_noise_gen_eval': P_v_noise_gen_eval, 'P_v_noise_gen_vmap': P_v_noise_gen_vmap}
+                  'h_vmap': h_vmap, 'H_vmap': H_vmap, 'P_v_vmap': P_v_vmap}
 
     return meas_model
 
@@ -687,8 +637,8 @@ def forward_propagation_iterate(i, input_dict, propagators, models, dyn_args, cf
             P_v_hst = input_dict['P_v_hst']
 
             # Measurement Model Evaluation
-            H_hst = H_hst.at[i,:,:,:].set(models['measurements']['H_vmap'](X_arc_hst,X_arc_hst))
-            P_v_hst = P_v_hst.at[i,:,:,:].set(models['measurements']['P_v_vmap'](X_arc_hst,X_arc_hst))
+            H_hst = H_hst.at[i,:,:,:].set(models['measurements']['H_vmap'](X_arc_hst))
+            P_v_hst = P_v_hst.at[i,:,:,:].set(models['measurements']['P_v_vmap'](X_arc_hst))
 
             output_dict['H_hst'] = H_hst
             output_dict['P_v_hst'] = P_v_hst
@@ -750,8 +700,8 @@ def backward_propagation_iterate(ii,input_dict, propagators, models, dyn_args, c
             P_v_hst = input_dict['P_v_hst']
 
             # Measurement Model Evaluation
-            H_hst = H_hst.at[i,:,:,:].set(models['measurements']['H_vmap'](X_arc_hst_f,X_arc_hst_f))
-            P_v_hst = P_v_hst.at[i,:,:,:].set(models['measurements']['P_v_vmap'](X_arc_hst_f,X_arc_hst_f))
+            H_hst = H_hst.at[i,:,:,:].set(models['measurements']['H_vmap'](X_arc_hst_f))
+            P_v_hst = P_v_hst.at[i,:,:,:].set(models['measurements']['P_v_vmap'](X_arc_hst_f))
 
             output_dict['H_hst'] = H_hst
             output_dict['P_v_hst'] = P_v_hst
@@ -1151,9 +1101,9 @@ def sim_Det_traj(sol, Sys, propagators, models, dyn_args, cfg_args):
             B_hst = B_hst.at[arc_i_0:arc_i_f,:,:].set(tmp_B_js)
 
             if cfg_args.feedback_type.lower() == 'estimated_state':
-                h_js = models['measurements']['h_vmap'](X_hst_arc,X_hst_arc)
-                H_js = models['measurements']['H_vmap'](X_hst_arc,X_hst_arc)
-                P_v_js = models['measurements']['P_v_vmap'](X_hst_arc,X_hst_arc)
+                h_js = models['measurements']['h_vmap'](X_hst_arc)
+                H_js = models['measurements']['H_vmap'](X_hst_arc)
+                P_v_js = models['measurements']['P_v_vmap'](X_hst_arc)
                 h_hst = h_hst.at[arc_i_0:arc_i_f+1,:].set(h_js)
                 H_hst = H_hst.at[arc_i_0:arc_i_f+1,:,:].set(H_js)
                 P_v_hst = P_v_hst.at[arc_i_0:arc_i_f+1,:,:].set(P_v_js)
@@ -1256,8 +1206,8 @@ def sim_Det_traj(sol, Sys, propagators, models, dyn_args, cfg_args):
             P_hst = P_hst.at[post_insert_i0+1:,:].set(P_js_post_insert[1:,:,:])
         elif cfg_args.feedback_type.lower() == 'estimated_state':
             # New cov propagation using subArc propagator
-            H_js_post_insert = models['measurements']['H_vmap'](X_hst_post_insert,X_hst_post_insert)
-            P_v_js_post_insert = models['measurements']['P_v_vmap'](X_hst_post_insert,X_hst_post_insert)
+            H_js_post_insert = models['measurements']['H_vmap'](X_hst_post_insert)
+            P_v_js_post_insert = models['measurements']['P_v_vmap'](X_hst_post_insert)
             H_hst = H_hst.at[post_insert_i0:,:,:].set(H_js_post_insert)
             P_v_hst = P_v_hst.at[post_insert_i0:,:,:].set(P_v_js_post_insert)
             cov_input_dict = {'A_js': A_hst[post_insert_i0:,:,:], 'B_js': B_hst[post_insert_i0:,:,:],
@@ -1480,8 +1430,9 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagators, model
                 A_hst_subarc = propagator_dX0_arc_vmap_e(Xhat_hst_subarc[:-1,:], U_arc_cmd, t_hst[subarc_i_0:subarc_i_f], t_hst[subarc_i_0+1:subarc_i_f+1], cfg_args)
                 B_hst_subarc = propagator_dU_arc_vmap_e(Xhat_hst_subarc[:-1,:], U_arc_cmd, t_hst[subarc_i_0:subarc_i_f], t_hst[subarc_i_0+1:subarc_i_f+1], cfg_args)
                 
-                H_hst_subarc = models['measurements']['H_vmap'](Xhat_hst_subarc, Xhat_hst_subarc) # Measurement linearization sees only estimated state
-                P_v_hst_subarc = models['measurements']['P_v_vmap'](X_hst_subarc, Xhat_hst_subarc) # Measurement covariances sees truth as well, not completely true but will address later
+                H_hst_subarc = models['measurements']['H_vmap'](Xhat_hst_subarc)
+                P_v_hst_subarc = models['measurements']['P_v_vmap'](Xhat_hst_subarc)
+
 
                 # Propagate the covariances across the sub-arc, only update at the very end
                 cov_input_dict = {'A_js': A_hst_subarc, 'B_js': B_hst_subarc,
@@ -1505,9 +1456,9 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagators, model
 
                 # Perform the EKF update to the final term in the sub arc
                 z_j1 = jax.random.multivariate_normal(keys_meas_nsy[k*cfg_args.N_subarcs + j], 
-                                                      models['measurements']['h_eval'](X_hst_subarc[-1,:],Xhat_hst_subarc[-1,:]), 
-                                                      models['measurements']['P_v_noise_gen_eval'](X_hst_subarc[-1,:], Xhat_hst_subarc[-1,:])) # Noisy measurement generated at end of sub-arc from true state
-                z_est_j1 = models['measurements']['h_eval'](Xhat_hst_subarc[-1,:],Xhat_hst_subarc[-1,:]) # This gets only estimated state values
+                                                      models['measurements']['h_eval'](X_hst[subarc_i_f,:]), 
+                                                      models['measurements']['P_v_eval'](X_hst[subarc_i_f,:]))
+                z_est_j1 = models['measurements']['h_eval'](Xhat_hst_subarc[-1,:])
                 L_j1 = L_hst[subarc_i_f,:,:]
                 X_j1m = Xhat_hst_subarc[-1,:]
                 X_j1p = X_j1m + L_j1 @ (z_j1 - z_est_j1)
@@ -1529,8 +1480,8 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagators, model
         sol_post_insert_est = propagators['propagator_e'](Xhat0_hst_post_insert, jnp.zeros((3,)),t0_post_insert, t0_post_insert+dyn_args['tf_T'], cfg_args.post_insert_length, cfg_args)
         Xhat_hst_post_insert = sol_post_insert_est.ys
         Xhat_hst = Xhat_hst.at[post_insert_i0+1:,:].set(Xhat_hst_post_insert[1:,:])
-        H_js_post_insert = models['measurements']['H_vmap'](Xhat_hst_post_insert, Xhat_hst_post_insert) # Measurement linearization sees only estimated state
-        P_v_js_post_insert = models['measurements']['P_v_vmap'](X_hst_post_insert, Xhat_hst_post_insert) # Measurement covariances sees both
+        H_js_post_insert = models['measurements']['H_vmap'](Xhat_hst_post_insert)
+        P_v_js_post_insert = models['measurements']['P_v_vmap'](Xhat_hst_post_insert)
 
         A_hst_pst_insert = propagator_dX0_arc_vmap_e(Xhat_hst_post_insert[:-1,:], jnp.zeros((3,)), t_hst_post_insert[:-1], t_hst_post_insert[1:], cfg_args)
         B_hst_pst_insert = propagator_dU_arc_vmap_e(Xhat_hst_post_insert[:-1,:], jnp.zeros((3,)), t_hst_post_insert[:-1], t_hst_post_insert[1:], cfg_args)
@@ -1569,10 +1520,9 @@ def sim_MC_trajs(inputs, seed, Sys, dyn_args, cfg_args, propagator, models):
 
     jax.debug.print("Running {} MC Trials...", N)
     one_trial = lambda key: single_MC_trial(key, inputs, Sys, dyn_args, cfg_args, propagator, models)
-    MC_Batched = jax.jit(jax.vmap(one_trial),backend='cpu')     
+    MC_Batched = jax.jit(jax.vmap(one_trial),backend='cpu')
     #One_MC = jax.jit(one_trial,backend='cpu')
-
-    arc_length_det = cfg_args.arc_length_det  # number of steps per arc in saved history
+    
     length = cfg_args.length  # total number of steps in saved history
     X_hsts = jnp.zeros((N,length, 7))
     if cfg_args.feedback_type.lower() == 'estimated_state':
