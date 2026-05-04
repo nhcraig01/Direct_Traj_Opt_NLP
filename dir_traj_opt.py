@@ -29,7 +29,7 @@ if __name__ == "__main__":
     #   L2_S-HO_to_L1_Lyap
     #   L2_S-HO_to_L4_N-Axial
     #   Sandbox
-    folder_name = "L2_S-NRHO_to_L2_N-NRHO"
+    folder_name = "L2_S-HO_to_L1_Lyap"
 
     # Problem Types:
     #   deterministic
@@ -44,7 +44,7 @@ if __name__ == "__main__":
     # Feedback Controller Types:
     #   true_state
     #   estimated_state
-    Feedback_Control_Type = "true_state" 
+    Feedback_Control_Type = "estimated_state" 
 
     # Measurement Types (only applies for estimated state feedback): 
     #   position
@@ -58,7 +58,7 @@ if __name__ == "__main__":
     #   deterministic
     #   stochastic_gauss_zoh_true_state
     #   stochastic_gauss_zoh_estimated_state_{measurements}
-    Hot_Start_Sol = "deterministic"
+    Hot_Start_Sol = "stochastic_gauss_zoh_estimated_state_range_range-rate_angles"
 
     # Node Resampling (only applies if hot start solution is not None):
     #   None
@@ -86,7 +86,7 @@ if __name__ == "__main__":
     optOptions = {'Major optimality tolerance': 1e-5,   # Keep here
                   'Major feasibility tolerance': 1e-6,  # Keep here - Changes how tightly the constraints are met
                   'Minor feasibility tolerance': 1e-6,  # Similar to above but for the QP sub-problem
-                  'Major iterations limit': 1000,
+                  'Major iterations limit': 0,
                   'Partial prince': 1,                  # Keep here - Impacts the number of variales to examine in the gradient search (larger is fewer)
                   'Linesearch tolerance': .99,          # Keep here - Sets the level of accuracy to find in the quadratic sub problem
                   'Function precision': 1e-10,          # Keep a few (2 to 3) orders of magnitude above the integration tolerances to keep SNOPT from seeing noise

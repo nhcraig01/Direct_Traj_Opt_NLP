@@ -149,54 +149,8 @@ def TrueStateFeedback_CovPropagators():
     return cov_propagators
 
 def EstimatedStateFeedback_CovPropagators():
-    def perArc_propagator(vals_k, dyn_terms, ctrl_terms, meas_terms, meas_update: bool = True):
-        # Unpack the current estimate and error values
-        Phat_k = vals_k['Phat_k']
-        Ptild_k = vals_k['Ptild_k']
+    def subArc_iterator(j, input_dict):
 
-        # Unpack the dynamical values
-        A_k = dyn_terms['A_k']
-        B_k = dyn_terms['B_k']
-        G_stoch = dyn_terms['G_stoch']
-
-        # Unpack the control values
-        K_k = ctrl_terms['K_k']
-        G_exe = ctrl_terms['G_exe']
-
-        # Unpack the measurement values
-        if meas_update:
-            H_k1 = meas_terms['H_k1']
-            P_v = meas_terms['P_v']
-        
-        # Perform the covariance time propagation
-        Astar_k = A_k + B_k @ K_k
-        
-        Phat_k1 = Astar_k @ Phat_k @ Astar_k.T
-        Ptild_k1 = A_k @ Ptild_k @ A_k.T + B_k @ (G_exe + G_stoch) @ B_k.T
-
-        # Perform the measurement update if indicated
-        if meas_update:
-            # Compute the Kalman Gain
-            C_k1 = Ptild_k1 @ H_k1.T
-            W_k1 = H_k1 @ Ptild_k1 @ H_k1.T + P_v
-            L_k1 = jax.scipy.linalg.solve(W_k1.T, C_k1.T).T  # L_k = C_k1 @ jnp.linalg.inv(W_k1)
-
-            # Update the covariance values
-            Phat_k1_p = Phat_k1 + L_k1 @ W_k1 @ L_k1.T
-            tmp_mat = jnp.eye(7) - L_k1 @ H_k1
-            Ptild_k1_p = tmp_mat @ Ptild_k1 @ tmp_mat.T + L_k1 @ P_v @ L_k1.T
-            
-            Phat_k1 = Phat_k1_p
-            Ptild_k1 = Ptild_k1_p
-
-        vals_k1 = {'Phat_k1': Phat_k1,
-                    'Ptild_k1': Ptild_k1,
-                    'P_k1': Phat_k1 + Ptild_k1,
-                    'L_k1': L_k1 if meas_update else None}
-
-        return vals_k1
-    
-    def subArc_iterator(j,input_dict):
         # Unpack unmodified input terms
         A_js = input_dict['A_js']
         B_js = input_dict['B_js']
@@ -208,43 +162,37 @@ def EstimatedStateFeedback_CovPropagators():
         update_js = input_dict['update_js']
 
         # Unpack modified input terms
-        Phat_js = input_dict['Phat_js']
-        Ptild_js = input_dict['Ptild_js']
-        Phattild_js = input_dict['Phattild_js']
+        Paug_js = input_dict['Paug_js']
         L_js = input_dict['L_js']
-        tau_hat_j = input_dict['tau_hat_j']
-        tau_tild_j = input_dict['tau_tild_j']
-        gam_hat_j = input_dict['gam_hat_j']
-        gam_tild_j = input_dict['gam_tild_j']
+        tau_j = input_dict['tau_j']
+        gam_j = input_dict['gam_j']
 
         # Grab terms for this subArc
-        Phat_j = Phat_js[j,:,:]
-        Ptild_j = Ptild_js[j,:,:]
-        Phattild_j = Phattild_js[j,:,:]
+        Paug_j = Paug_js[j,:,:]
         A_j = A_js[j,:,:]
         B_j = B_js[j,:,:]
-        Phat0_arc = Phat_js[0,:,:]
+        Paug0_arc = Paug_js[0,:,:]
         P_u_arc = G_stoch_arc + G_exe_arc
         H_j1 = H_js[j+1,:,:]
         P_v_j1 = P_v_js[j+1,:,:]
         update_j1 = update_js[j+1]
 
+        # Propagate augmented covariance and cross correlations through time
+        A_aug = jnp.block([[A_j, jnp.zeros((7,7))],
+                       [jnp.zeros((7,7)), A_j]])
+        B_aug = jnp.block([[B_j@K_arc, jnp.zeros((7,7))],
+                       [jnp.zeros((7,7)), jnp.zeros((7,7))]])
+        C_aug = jnp.block([[jnp.zeros((7,3))],
+                          [B_j]])
 
-        # Propagate the covariances through time
-        tmp_a = A_j @ tau_hat_j @ K_arc.T @ B_j.T
-        tmp_b = A_j @ gam_tild_j @ B_j.T
-
-        Phat_j1m = A_j @ Phat_j @ A_j.T + tmp_a + tmp_a.T + B_j @ K_arc @ Phat0_arc @ K_arc.T @ B_j.T
-        Ptild_j1m = A_j @ Ptild_j @ A_j.T - tmp_b - tmp_b.T + B_j @ P_u_arc @ B_j.T
-        Phattild_j1m = A_j @ Phattild_j @ A_j.T - A_j @ gam_hat_j @ B_j.T + B_j @ K_arc @ tau_tild_j.T @ A_j.T
-
-        tau_hat_j1m = A_j @ tau_hat_j + B_j @ K_arc @ Phat0_arc
-        tau_tild_j1m = A_j @ tau_tild_j
-        gam_hat_j1m = A_j @ gam_hat_j
-        gam_tild_j1m = A_j @ gam_tild_j - B_j @ P_u_arc
-
+        tmp_a = A_aug @ tau_j @ B_aug.T
+        tmp_b = A_aug @ gam_j @ C_aug.T
+        Paug_j1m = A_aug @ Paug_j @ A_aug.T + tmp_a + tmp_a.T + B_aug @ Paug0_arc @ B_aug.T - tmp_b - tmp_b.T + C_aug @ P_u_arc @ C_aug.T
+        tau_j1m = A_aug @ tau_j + B_aug @ Paug0_arc
+        gam_j1m = A_aug @ gam_j - C_aug @ P_u_arc
 
         # Perform the measurement update
+        Ptild_j1m = Paug_j1m[7:14,7:14]
         p_test = 5/6
         val1 = p_test # val1 = 1.0 if no underweighting else p_test
         val_under = jnp.linalg.trace(H_j1 @ Ptild_j1m @ H_j1.T) - p_test/(1-p_test) * jnp.linalg.trace(P_v_j1)
@@ -252,35 +200,29 @@ def EstimatedStateFeedback_CovPropagators():
 
         C_j1 = Ptild_j1m @ H_j1.T
         W_j1 = (1/p_apply)*H_j1 @ Ptild_j1m @ H_j1.T + P_v_j1
-        L_j1 = update_j1 * jax.scipy.linalg.solve(W_j1.T, C_j1.T).T  # L_j1 = C_j1 @ jnp.linalg.inv(W_j1)
+        L_j1 = update_j1 * jax.scipy.linalg.solve(W_j1.T, C_j1.T).T
 
-        tmp_c = Phattild_j1m @ H_j1.T @ L_j1.T
-        tmp_d = L_j1 @ P_v_j1 @ L_j1.T
-        tmp_e = jnp.eye(7) - L_j1 @ H_j1
+        D_aug = jnp.block([[jnp.eye(7), -L_j1 @ H_j1],
+                          [jnp.zeros((7,7)), jnp.eye(7) - L_j1 @ H_j1]])
+        F_aug = jnp.block([[L_j1],
+                          [L_j1]])
+        
+        Paug_j1p = D_aug @ Paug_j1m @ D_aug.T + F_aug @ P_v_j1 @ F_aug.T
+        tau_j1 = D_aug @ tau_j1m
+        gam_j1 = D_aug @ gam_j1m
 
-        Phat_j1 = Phat_j1m - tmp_c - tmp_c.T + L_j1 @ H_j1 @ Ptild_j1m @ H_j1.T @ L_j1.T + tmp_d
-        Ptild_j1 = tmp_e @ Ptild_j1m @ tmp_e.T + tmp_d
-        Phattild_j1 = (Phattild_j1m - L_j1 @ H_j1 @ Ptild_j1m) @ tmp_e.T + tmp_d
-
-        tau_hat_j1 = tau_hat_j1m - L_j1 @ H_j1 @ tau_tild_j1m
-        tau_tild_j1 = tmp_e @ tau_tild_j1m
-        gam_hat_j1 = gam_hat_j1m - L_j1 @ H_j1 @ gam_tild_j1m
-        gam_tild_j1 = tmp_e @ gam_tild_j1m
-
-        Phat_js = Phat_js.at[j+1,:,:].set(Phat_j1)
-        Ptild_js = Ptild_js.at[j+1,:,:].set(Ptild_j1)
-        Phattild_js = Phattild_js.at[j+1,:,:].set(Phattild_j1)
+        Paug_js = Paug_js.at[j+1,:,:].set(Paug_j1p)
         L_js = L_js.at[j+1,:,:].set(L_j1)
 
         output_dict = {'A_js': A_js, 'B_js': B_js, 'H_js': H_js, 'P_v_js': P_v_js,
                         'K_arc': K_arc, 'G_stoch_arc': G_stoch_arc, 'G_exe_arc': G_exe_arc, 'update_js': update_js,
-                        'Phat_js': Phat_js, 'Ptild_js': Ptild_js, 'Phattild_js': Phattild_js, 'L_js': L_js,
-                        'tau_hat_j': tau_hat_j1, 'tau_tild_j': tau_tild_j1, 
-                        'gam_hat_j': gam_hat_j1, 'gam_tild_j': gam_tild_j1}
-
+                        'Paug_js': Paug_js, 'L_js': L_js,
+                        'tau_j': tau_j1, 'gam_j': gam_j1}
+        
         return output_dict
+    
+    cov_propagators = {'subArc': subArc_iterator}
 
-    cov_propagators = {'perArc': perArc_propagator, 'subArc': subArc_iterator}
     return cov_propagators
 
 def AB_rev2fwd(A_rev, B_rev):
@@ -753,50 +695,34 @@ def forward_propagation_cov_iterate(i, input_dict, cov_propagators, dyn_args, cf
         H_hst = input_dict['H_hst']
         P_v_hst = input_dict['P_v_hst']
         # Unpack modified inputs
-        Phat_hst = input_dict['Phat_hst']
-        Ptild_hst = input_dict['Ptild_hst']
-        Phattild_hst = input_dict['Phattild_hst']
-        Phat0_arc = input_dict['Phat0_arc']
-        Ptild0_arc = input_dict['Ptild0_arc']
-        Phattild0_arc = input_dict['Phattild0_arc']
-        Phat_hst = Phat_hst.at[i,0,:,:].set(Phat0_arc)
-        Ptild_hst = Ptild_hst.at[i,0,:,:].set(Ptild0_arc)
-        Phattild_hst = Phattild_hst.at[i,0,:,:].set(Phattild0_arc)
+        Paug_hst = input_dict['Paug_hst']
+        Paug0_arc = input_dict['Paug0_arc']
+        Paug_hst = Paug_hst.at[i,0,:,:].set(Paug0_arc)
 
         # Create input dict for subArc iterator
         cov_input_dict = {'A_js': A_hst[i,:,:,:], 'B_js': B_hst[i,:,:,:],
                           'H_js': H_hst[i,:,:,:], 'P_v_js': P_v_hst[i,:,:,:],
                           'K_arc': K_arc_hst[i,:,:], 'G_stoch_arc': dyn_args['G_stoch'], 'G_exe_arc': G_exe_arc_hst[i,:,:],
                           'update_js': jnp.ones((cfg_args.N_subarcs+1,)),
-                          'Phat_js': Phat_hst[i,:,:,:], 'Ptild_js': Ptild_hst[i,:,:,:], 'Phattild_js': Phattild_hst[i,:,:,:], 'L_js': jnp.zeros((cfg_args.N_subarcs+1, 7,cfg_args.meas_dim))}
+                          'Paug_js': Paug_hst[i,:,:,:], 'L_js': jnp.zeros((cfg_args.N_subarcs+1, 7,cfg_args.meas_dim))}
         K_arc = K_arc_hst[i,:,:]
-        P_U_arc = K_arc @ Phat0_arc @ K_arc.T
+        P_U_arc = K_arc @ Paug0_arc[:7,:7] @ K_arc.T
         P_U_arc_hst = P_U_arc_hst.at[i,:,:].set(P_U_arc)
 
         # Set the initial cross terms for the arc, will be overwritten for they are reset after each arc
-        cov_input_dict['tau_hat_j'] = Phat0_arc
-        cov_input_dict['tau_tild_j'] = Phattild0_arc.T
-        cov_input_dict['gam_hat_j'] = jnp.zeros((7,3))
-        cov_input_dict['gam_tild_j'] = jnp.zeros((7,3))
+        cov_input_dict['tau_j'] = Paug0_arc
+        cov_input_dict['gam_j'] = jnp.zeros((14,3))
 
-        # Propagate covariances over arc
         cov_output_dict = jax.lax.fori_loop(0, cfg_args.N_subarcs, cov_propagators['subArc'], cov_input_dict)
-
-        # Set the output terms into the histories
-        Phat_hst = Phat_hst.at[i,:,:,:].set(cov_output_dict['Phat_js'])
-        Ptild_hst = Ptild_hst.at[i,:,:,:].set(cov_output_dict['Ptild_js'])
-        Phattild_hst = Phattild_hst.at[i,:,:,:].set(cov_output_dict['Phattild_js'])
-        Phat0_arc = cov_output_dict['Phat_js'][-1,:,:]
-        Ptild0_arc = cov_output_dict['Ptild_js'][-1,:,:]
-        Phattild0_arc = cov_output_dict['Phattild_js'][-1,:,:]
+        Paug_hst = Paug_hst.at[i,:,:,:].set(cov_output_dict['Paug_js'])
+        Paug0_arc = cov_output_dict['Paug_js'][-1,:,:]
 
         # Set the propagator output dict values
         output_dict = {'A_hst': A_hst, 'B_hst': B_hst, 
                        'H_hst': H_hst, 'P_v_hst': P_v_hst,
                        'K_arc_hst': K_arc_hst, 'G_exe_arc_hst': G_exe_arc_hst,
-                       'Phat_hst': Phat_hst, 'Ptild_hst': Ptild_hst, 'Phattild_hst': Phattild_hst, 'P_U_arc_hst': P_U_arc_hst,
-                       'Phat0_arc': Phat0_arc, 'Ptild0_arc': Ptild0_arc, 'Phattild0_arc': Phattild0_arc}
-        
+                       'Paug_hst': Paug_hst, 'P_U_arc_hst': P_U_arc_hst, 'Paug0_arc': Paug0_arc}
+
     return output_dict
 
 
@@ -843,14 +769,11 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, mo
         if cfg_args.feedback_type.lower() == 'true_state':
             P0 = dyn_args['Phat_0']
         if cfg_args.feedback_type.lower() == 'estimated_state':
-            Phat_hst = jnp.zeros((N_arcs, N_subarcs+1, 7, 7))
-            Ptild_hst = jnp.zeros((N_arcs, N_subarcs+1, 7, 7))
-            Phattild_hst = jnp.zeros((N_arcs, N_subarcs+1, 7, 7))
+            Paug_hst = jnp.zeros((N_arcs, N_subarcs+1, 14, 14))
             H_hst = jnp.zeros((N_arcs, N_subarcs+1, cfg_args.meas_dim, 7))
             P_v_hst = jnp.zeros((N_arcs, N_subarcs+1, cfg_args.meas_dim, cfg_args.meas_dim))
-            Phat0 = dyn_args['Phat_0']
-            Ptild0 = dyn_args['Ptild_0']
-            Phattild0 = jnp.zeros((7,7))
+            Paug0 = jnp.block([[dyn_args['Phat_0'], jnp.zeros((7,7))],
+                              [jnp.zeros((7,7)), dyn_args['Ptild_0']]])
 
     # Propagate state and first-order jacobians forward (to half) ------------------------
     # ------------------------------------------------------------------------------------
@@ -911,19 +834,17 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, mo
             cov_input_dict = {'A_hst': A_hst, 'B_hst': B_hst, 'K_arc_hst': K_arc_hst, 'G_exe_arc_hst': G_exe_arc_hst,
                             'P_hst': P_hst, 'P0_arc': P0, 'P_U_arc_hst': P_U_arc_hst}
         if cfg_args.feedback_type.lower() == 'estimated_state':
+            # Starting here with augmented vector form
             cov_input_dict = {'A_hst': A_hst, 'B_hst': B_hst, 'K_arc_hst': K_arc_hst, 'G_exe_arc_hst': G_exe_arc_hst,
                               'H_hst': H_hst, 'P_v_hst': P_v_hst,
-                              'Phat_hst': Phat_hst, 'Ptild_hst': Ptild_hst, 'Phattild_hst': Phattild_hst, 'P_U_arc_hst': P_U_arc_hst,
-                              'Phat0_arc': Phat0, 'Ptild0_arc': Ptild0, 'Phattild0_arc': Phattild0}
-        
+                              'Paug_hst': Paug_hst, 'P_U_arc_hst': P_U_arc_hst, 'Paug0_arc': Paug0}
+
         cov_out = jax.lax.fori_loop(0, N_arcs, iterators['cov_propagation_iterate_e'], cov_input_dict)
 
         if cfg_args.feedback_type.lower() == 'true_state':
             P_hst = cov_out['P_hst']
         if cfg_args.feedback_type.lower() == 'estimated_state':
-            Phat_hst = cov_out['Phat_hst']
-            Ptild_hst = cov_out['Ptild_hst']
-            Phattild_hst = cov_out['Phattild_hst']
+            Paug_hst = cov_out['Paug_hst']
         P_U_arc_hst = cov_out['P_U_arc_hst']
 
     # Objective and Constraints ouputs ------------------------------------------------
@@ -949,7 +870,10 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, mo
         if cfg_args.feedback_type.lower() == 'true_state':
             P_Xf_full = P_hst[-1,-1,:,:]
         if cfg_args.feedback_type.lower() == 'estimated_state':
-            P_Xf_full = Phat_hst[-1,-1,:,:] - Phattild_hst[-1,-1,:,:] - Phattild_hst[-1,-1,:,:].T + Ptild_hst[-1,-1,:,:]
+            Phat_f = Paug_hst[-1,-1,:7,:7]
+            Ptild_f = Paug_hst[-1,-1,7:14,7:14]
+            Phattild_f = Paug_hst[-1,-1,:7,7:14]
+            P_Xf_full = Phat_f - Phattild_f - Phattild_f.T + Ptild_f
         tmp_P_Xf_con_val = S_Xf_targ_inv @ P_Xf_full @ S_Xf_targ_inv.T - jnp.eye(7)
         output_dict['c_P_Xf'] = jnp.log10(mat_lmax(tmp_P_Xf_con_val)+1) # constraint - final state covariance
 
@@ -1054,9 +978,7 @@ def sim_Det_traj(sol, Sys, propagators, models, dyn_args, cfg_args):
             H_hst = jnp.zeros((length, cfg_args.meas_dim, 7))
             L_hst = jnp.zeros((length, 7, cfg_args.meas_dim))
             P_v_hst = jnp.zeros((length, cfg_args.meas_dim, cfg_args.meas_dim))
-            Phat_hst = jnp.zeros((length, 7, 7))
-            Ptild_hst = jnp.zeros((length, 7, 7))
-            Phattild_hst = jnp.zeros((length, 7, 7))
+            Paug_hst = jnp.zeros((length, 14, 14))
     
     # Initialize first entries
     X_hst = X_hst.at[0,:].set(X0_det)
@@ -1066,9 +988,8 @@ def sim_Det_traj(sol, Sys, propagators, models, dyn_args, cfg_args):
         if cfg_args.feedback_type.lower() == 'true_state':
             P_hst = P_hst.at[0,:,:].set(dyn_args['Phat_0'])
         elif cfg_args.feedback_type.lower() == 'estimated_state':
-            Phat_hst = Phat_hst.at[0,:,:].set(dyn_args['Phat_0'])
-            Ptild_hst = Ptild_hst.at[0,:,:].set(dyn_args['Ptild_0'])
-            Phattild_hst = Phattild_hst.at[0,:,:].set(jnp.zeros((7,7)))
+            Paug_hst = Paug_hst.at[0,:,:].set(jnp.block([[dyn_args['Phat_0'], jnp.zeros((7,7))],
+                                                          [jnp.zeros((7,7)), dyn_args['Ptild_0']]]))
 
     # Propagate state and linearize dynamics across each arc
     for k in range(cfg_args.N_arcs):
@@ -1128,9 +1049,8 @@ def sim_Det_traj(sol, Sys, propagators, models, dyn_args, cfg_args):
                 P0_arc = P_hst[arc_i_0,:,:]
                 P_u_arc = K_arc @ P0_arc @ K_arc.T  
             elif cfg_args.feedback_type.lower() == 'estimated_state':
-                Phat0_arc = Phat_hst[arc_i_0,:,:]
-                Ptild0_arc = Ptild_hst[arc_i_0,:,:]
-                Phattild0_arc = Phattild_hst[arc_i_0,:,:]
+                Paug0_arc = Paug_hst[arc_i_0,:,:]
+                Phat0_arc = Paug0_arc[:7,:7]
                 P_u_arc = K_arc @ Phat0_arc @ K_arc.T  # only consider estimation error for control covariance
 
             gain_weights_hst = gain_weights_hst.at[arc_i_0:arc_i_f,:].set(jnp.tile(gain_weights[k,:], (arc_length-1,1)))
@@ -1167,15 +1087,12 @@ def sim_Det_traj(sol, Sys, propagators, models, dyn_args, cfg_args):
                                     'H_js': H_hst[arc_i_0:arc_i_f+1,:,:], 'P_v_js': P_v_hst[arc_i_0:arc_i_f+1,:,:],
                                     'K_arc': K_arc, 'G_stoch_arc': G_stoch_arc, 'G_exe_arc': G_exe_arc,
                                     'update_js': jnp.zeros((arc_length,)).at[::(N_save-1)].set(1.),
-                                    'Phat_js': Phat_hst[arc_i_0:arc_i_f+1,:,:], 'Ptild_js': Ptild_hst[arc_i_0:arc_i_f+1,:,:], 'Phattild_js': Phattild_hst[arc_i_0:arc_i_f+1,:,:],'L_js': L_hst[arc_i_0:arc_i_f+1,:,:],
-                                    'tau_hat_j': Phat0_arc, 'tau_tild_j': Phattild0_arc.T,
-                                    'gam_tild_j': jnp.zeros((7,3)), 'gam_hat_j': jnp.zeros((7,3))}
+                                    'Paug_js': Paug_hst[arc_i_0:arc_i_f+1,:,:], 'L_js': L_hst[arc_i_0:arc_i_f+1,:,:],
+                                    'tau_j': Paug0_arc, 'gam_j': jnp.zeros((14,3))}
                 cov_output_dict = jax.lax.fori_loop(0, arc_length, propagator_cov_subArc, cov_input_dict)
 
                 # Set arc covariance outputs
-                Phat_hst = Phat_hst.at[arc_i_0+1:arc_i_f+1,:,:].set(cov_output_dict['Phat_js'][1:,:,:])
-                Ptild_hst = Ptild_hst.at[arc_i_0+1:arc_i_f+1,:,:].set(cov_output_dict['Ptild_js'][1:,:,:])
-                Phattild_hst = Phattild_hst.at[arc_i_0+1:arc_i_f+1,:,:].set(cov_output_dict['Phattild_js'][1:,:,:])
+                Paug_hst = Paug_hst.at[arc_i_0+1:arc_i_f+1,:,:].set(cov_output_dict['Paug_js'][1:,:,:])
                 L_hst = L_hst.at[arc_i_0+1:arc_i_f+1,:,:].set(cov_output_dict['L_js'][1:,:,:])
 
     # Post-insertion propagation
@@ -1214,15 +1131,15 @@ def sim_Det_traj(sol, Sys, propagators, models, dyn_args, cfg_args):
                                 'H_js': H_hst[post_insert_i0:,:,:], 'P_v_js': P_v_hst[post_insert_i0:,:,:],
                                 'K_arc': jnp.zeros((3,7)), 'G_stoch_arc': jnp.zeros((3,3)), 'G_exe_arc': jnp.zeros((3,3)),
                                 'update_js': jnp.zeros((cfg_args.post_insert_length,)),
-                                'Phat_js': Phat_hst[post_insert_i0:,:,:], 'Ptild_js': Ptild_hst[post_insert_i0:,:,:], 'Phattild_js': Phattild_hst[post_insert_i0:,:,:], 'L_js': L_hst[post_insert_i0:,:,:],
-                                'tau_hat_j': Phat_hst[post_insert_i0,:,:], 'tau_tild_j': Phattild_hst[post_insert_i0,:,:].T,
-                                'gam_tild_j': jnp.zeros((7,3)), 'gam_hat_j': jnp.zeros((7,3))}
+                                'Paug_js': Paug_hst[post_insert_i0:,:,:], 'L_js': L_hst[post_insert_i0:,:,:],
+                                'tau_j': Paug_hst[post_insert_i0,:,:], 'gam_j': jnp.zeros((14,3))}
             cov_output_dict = jax.lax.fori_loop(0, cfg_args.post_insert_length, propagator_cov_subArc, cov_input_dict)
             
             # Set the covariance histories from post-insertion
-            Phat_hst = Phat_hst.at[post_insert_i0+1:,:,:].set(cov_output_dict['Phat_js'][1:,:,:])
-            Ptild_hst = Ptild_hst.at[post_insert_i0+1:,:,:].set(cov_output_dict['Ptild_js'][1:,:,:])
-            Phattild_hst = Phattild_hst.at[post_insert_i0+1:,:,:].set(cov_output_dict['Phattild_js'][1:,:,:])
+            Paug_hst = Paug_hst.at[post_insert_i0+1:,:,:].set(cov_output_dict['Paug_js'][1:,:,:])
+            Phat_hst = Paug_hst[:,:7,:7]
+            Ptild_hst = Paug_hst[:,7:14,7:14]
+            Phattild_hst = Paug_hst[:,:7,7:14]
             L_hst = L_hst.at[post_insert_i0+1:,:,:].set(cov_output_dict['L_js'][1:,:,:])
 
             P_hst = Phat_hst - Phattild_hst - Phattild_hst.swapaxes(-1,-2) + Ptild_hst
@@ -1347,9 +1264,7 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagators, model
     X_hst = jnp.zeros((length, 7))
     if cfg_args.feedback_type.lower() == 'estimated_state':
         Xhat_hst = jnp.zeros((length, 7))
-        Phat_hst = jnp.zeros((length, 7, 7))
-        Ptild_hst = jnp.zeros((length, 7, 7))
-        Phattild_hst = jnp.zeros((length, 7, 7))
+        Paug_hst = jnp.zeros((length, 14, 14))
         L_hst = jnp.zeros((length, 7, cfg_args.meas_dim))
     U_hst = jnp.zeros((length, 3))
     t_hst = jnp.zeros((length,))
@@ -1358,9 +1273,8 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagators, model
     X_hst = X_hst.at[0,:].set(X0_trial)
     if cfg_args.feedback_type.lower() == 'estimated_state':
         Xhat_hst = Xhat_hst.at[0,:].set(Xhat0_trial)
-        Phat_hst = Phat_hst.at[0,:,:].set(dyn_args['Phat_0'])
-        Ptild_hst = Ptild_hst.at[0,:,:].set(dyn_args['Ptild_0'])
-        Phattild_hst = Phattild_hst.at[0,:,:].set(jnp.zeros((7,7)))
+        Paug_hst = Paug_hst.at[0,:,:].set(jnp.block([[dyn_args['Phat_0'], jnp.zeros((7,7))],
+                                                      [jnp.zeros((7,7)), dyn_args['Ptild_0']]]))
     t_hst = t_hst.at[0].set(t_node_bound[0])
 
 
@@ -1378,20 +1292,15 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagators, model
             U_arc_tcm = MC_U_tcm_k(X0_arc_det, X0_arc, K_arc)
         if cfg_args.feedback_type.lower() == 'estimated_state':
             Xhat0_arc = Xhat_hst[arc_i_0,:]
-            Phat0_arc = Phat_hst[arc_i_0,:,:]
-            Ptild0_arc = Ptild_hst[arc_i_0,:,:]
-            Phattild0_arc = Phattild_hst[arc_i_0,:,:]
+            Paug0_arc = Paug_hst[arc_i_0,:,:]
 
             U_arc_tcm = MC_U_tcm_k(X0_arc_det, Xhat0_arc, K_arc)
             G_exe_arc = gates2Gexe(U_arc_det, dyn_args['gates'])
             
             # Set the cross correlation arrays, these will be reset across each arc
-            tau_hat_hst_arc = jnp.zeros((N_subarcs+1,7,7))
-            tau_tild_hst_arc = jnp.zeros((N_subarcs+1,7,7))
-            gam_hat_hst_arc = jnp.zeros((N_subarcs+1,7,3))
-            gam_tild_hst_arc = jnp.zeros((N_subarcs+1,7,3))
-            tau_hat_hst_arc = tau_hat_hst_arc.at[0,:,:].set(Phat0_arc)
-            tau_tild_hst_arc = tau_tild_hst_arc.at[0,:,:].set(Phattild0_arc.T)
+            tau_hst_arc = jnp.zeros((N_subarcs+1,14,14))
+            gam_hst_arc = jnp.zeros((N_subarcs+1,14,3))
+            tau_hst_arc = tau_hst_arc.at[0,:,:].set(Paug0_arc)
 
         # Randomly sample the execution error and process noise for this arc
         U_arc_exe = MC_U_exe(U_arc_det, dyn_args['gates'], keys_U_exe[k])
@@ -1439,20 +1348,15 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagators, model
                                     'H_js': H_hst_subarc, 'P_v_js': P_v_hst_subarc,
                                     'K_arc': K_arc, 'G_stoch_arc': dyn_args['G_stoch'], 'G_exe_arc': G_exe_arc,
                                     'update_js': jnp.zeros((cfg_args.N_save,)).at[-1].set(1.),
-                                    'Phat_js': Phat_hst[subarc_i_0:subarc_i_f+1,:,:], 'Ptild_js': Ptild_hst[subarc_i_0:subarc_i_f+1,:,:], 'Phattild_js': Phattild_hst[subarc_i_0:subarc_i_f+1,:,:], 'L_js': L_hst[subarc_i_0:subarc_i_f+1,:,:],
-                                    'tau_hat_j': tau_hat_hst_arc[j], 'tau_tild_j': tau_tild_hst_arc[j],
-                                    'gam_hat_j': gam_hat_hst_arc[j], 'gam_tild_j': gam_tild_hst_arc[j]}
+                                    'Paug_js': Paug_hst[subarc_i_0:subarc_i_f+1,:,:], 'L_js': L_hst[subarc_i_0:subarc_i_f+1,:,:],
+                                    'tau_j': tau_hst_arc[j], 'gam_j': gam_hst_arc[j]}
                 cov_output_dict = jax.lax.fori_loop(0, cfg_args.N_save-1, propagator_cov_subArc, cov_input_dict)
 
                 # Save covariances to output arrays
-                Phat_hst = Phat_hst.at[subarc_i_0+1:subarc_i_f+1,:,:].set(cov_output_dict['Phat_js'][1:,:,:])
-                Ptild_hst = Ptild_hst.at[subarc_i_0+1:subarc_i_f+1,:,:].set(cov_output_dict['Ptild_js'][1:,:,:])
-                Phattild_hst = Phattild_hst.at[subarc_i_0+1:subarc_i_f+1,:,:].set(cov_output_dict['Phattild_js'][1:,:,:])
+                Paug_hst = Paug_hst.at[subarc_i_0+1:subarc_i_f+1,:,:].set(cov_output_dict['Paug_js'][1:,:,:])
                 L_hst = L_hst.at[subarc_i_0+1:subarc_i_f+1,:,:].set(cov_output_dict['L_js'][1:,:,:])
-                tau_hat_hst_arc = tau_hat_hst_arc.at[j+1,:,:].set(cov_output_dict['tau_hat_j'])
-                tau_tild_hst_arc = tau_tild_hst_arc.at[j+1,:,:].set(cov_output_dict['tau_tild_j'])
-                gam_hat_hst_arc = gam_hat_hst_arc.at[j+1,:,:].set(cov_output_dict['gam_hat_j'])
-                gam_tild_hst_arc = gam_tild_hst_arc.at[j+1,:,:].set(cov_output_dict['gam_tild_j'])
+                tau_hst_arc = tau_hst_arc.at[j+1,:,:].set(cov_output_dict['tau_j'])
+                gam_hst_arc = gam_hst_arc.at[j+1,:,:].set(cov_output_dict['gam_j'])
 
                 # Perform the EKF update to the final term in the sub arc
                 z_j1 = jax.random.multivariate_normal(keys_meas_nsy[k*cfg_args.N_subarcs + j], 
@@ -1490,14 +1394,14 @@ def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagators, model
                             'H_js': H_js_post_insert, 'P_v_js': P_v_js_post_insert,
                             'K_arc': jnp.zeros((3,7)), 'G_stoch_arc': jnp.zeros((3,3)), 'G_exe_arc': jnp.zeros((3,3)),
                             'update_js': jnp.zeros((cfg_args.post_insert_length,)),
-                            'Phat_js': Phat_hst[post_insert_i0:,:,:], 'Ptild_js': Ptild_hst[post_insert_i0:,:,:], 'Phattild_js': Phattild_hst[post_insert_i0:,:,:], 'L_js': L_hst[post_insert_i0:,:,:],
-                            'tau_hat_j': Phat_hst[post_insert_i0,:,:], 'tau_tild_j': Phattild_hst[post_insert_i0,:,:].T,
-                            'gam_tild_j': jnp.zeros((7,3)), 'gam_hat_j': jnp.zeros((7,3))}
+                            'Paug_js': Paug_hst[post_insert_i0:,:,:], 'L_js': L_hst[post_insert_i0:,:,:],
+                            'tau_j': Paug_hst[post_insert_i0,:,:], 'gam_j': jnp.zeros((14,3))}
         cov_output_dict = jax.lax.fori_loop(0, cfg_args.post_insert_length, propagator_cov_subArc, cov_input_dict)
 
-        Phat_hst = Phat_hst.at[post_insert_i0+1:,:,:].set(cov_output_dict['Phat_js'][1:,:,:])
-        Ptild_hst = Ptild_hst.at[post_insert_i0+1:,:,:].set(cov_output_dict['Ptild_js'][1:,:,:])
-        Phattild_hst = Phattild_hst.at[post_insert_i0+1:,:,:].set(cov_output_dict['Phattild_js'][1:,:,:])
+        Paug_hst = Paug_hst.at[post_insert_i0+1:,:,:].set(cov_output_dict['Paug_js'][1:,:,:])
+        Phat_hst = Paug_hst[:,:7,:7]
+        Ptild_hst = Paug_hst[:,7:14,7:14]
+        Phattild_hst = Paug_hst[:,:7,7:14]
 
         P_hst = Phat_hst - Phattild_hst - Phattild_hst.swapaxes(-1,-2) + Ptild_hst
 
