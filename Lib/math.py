@@ -256,6 +256,28 @@ def stat_col_avoid(X_mean, P_x, dyn_args, cfg_args):
 
 stat_col_avoid_vmap = jax.vmap(stat_col_avoid, in_axes=(0,0,None,None))
 
+def adaptive_mesh_con_terms(t_node_bound, dt_min=1e-5, dt_max=1e6):
+    n = t_node_bound.shape[0]
+    tf = t_node_bound[-1]
+
+    jac = jnp.zeros((n + 1, n))
+    jac = jac.at[0, 0].set(1.0)
+    for i in range(n - 1):
+        jac = jac.at[i + 1, i].set(-1.0)
+        jac = jac.at[i + 1, i + 1].set(1.0)
+    jac = jac.at[-1, -1].set(1.0)
+
+    lower = jnp.zeros(n + 1)
+    lower = lower.at[0].set(0.0)
+    lower = lower.at[1:n].set(dt_min)
+    lower = lower.at[-1].set(tf)
+
+    upper = jnp.zeros(n + 1)
+    upper = upper.at[0].set(0.0)
+    upper = upper.at[1:n].set(dt_max)
+    upper = upper.at[-1].set(tf)
+
+    return {'jac': jac, 'lower': lower, 'upper': upper}
 
 def mat_sqrt(A):
     return jnp.linalg.cholesky(A)

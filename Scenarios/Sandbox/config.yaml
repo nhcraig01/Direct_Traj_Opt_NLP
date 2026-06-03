@@ -1,5 +1,5 @@
 ---
-name: "Random Testing"
+name: "L1 Lyapunov Orbit to L2 NRHO w/ Flybys"
 description: "IDK whaever... this is just random testing, go see the other scenarios for real stuff"
 dynamics:
   type: "CR3BP"
@@ -14,15 +14,15 @@ traj_parameters:
   MC_trials: 1000
 boundary_conditions:
   t0: "2026-01-01T00:00:00"
-  tf: "2026-01-21T00:00:00"
+  tf: "2026-01-31T00:00:00"
   tf_T: 0.5
   initial_orbit:
-    family_path: '../CR3BP_dev/EarthMoon_System/L2_S_Halo.h5'
+    family_path: '../CR3BP_dev/EarthMoon_System/L1_Lyap.h5'
     Orb_ID: 100
     Start_Idx: 0
   final_orbit:
-    family_path: '../CR3BP_dev/EarthMoon_System/L1_S_Halo.h5'
-    Orb_ID: 100
+    family_path: '../CR3BP_dev/EarthMoon_System/L2_S_Halo.h5'
+    Orb_ID: 300
     Start_Idx: 0
   type: "free"
   alpha:

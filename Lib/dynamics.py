@@ -541,15 +541,14 @@ def forward_propagation_iterate(i, input_dict, propagators, models, dyn_args, cf
     X0_true_f = input_dict['X0_true_f']
     X_hst = input_dict['X_hst']
     U_arc_hst = input_dict['U_arc_hst']   
-
-    t_node_bound = dyn_args['t_node_bound']
+    t_node_bound = input_dict['t_node_bound']
 
     sol_f = propagators['propagator_e'](X0_true_f, U_arc_hst[i,:], t_node_bound[i], t_node_bound[i+1], cfg_args.arc_length_opt, cfg_args)
     X_arc_hst = sol_f.ys[:,:7]
     t_arc_hst = sol_f.ts
     X_hst = X_hst.at[i,:,:].set(X_arc_hst)
 
-    output_dict = {'X_hst': X_hst, 'U_arc_hst': U_arc_hst}
+    output_dict = {'X_hst': X_hst, 'U_arc_hst': U_arc_hst, 't_node_bound': t_node_bound}
     
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
         A_hst = input_dict['A_hst']
@@ -594,8 +593,7 @@ def backward_propagation_iterate(ii,input_dict, propagators, models, dyn_args, c
     X0_true_b = input_dict['X0_true_b']
     X_hst = input_dict['X_hst']
     U_arc_hst = input_dict['U_arc_hst']
-
-    t_node_bound = dyn_args['t_node_bound']
+    t_node_bound = input_dict['t_node_bound']
 
     indx_b = dyn_args['indx_b']
     i = indx_b[ii]
@@ -607,7 +605,7 @@ def backward_propagation_iterate(ii,input_dict, propagators, models, dyn_args, c
     X_hst = X_hst.at[i,:,:].set(X_arc_hst_f)
 
 
-    output_dict = {'X_hst': X_hst, 'U_arc_hst': U_arc_hst}
+    output_dict = {'X_hst': X_hst, 'U_arc_hst': U_arc_hst, 't_node_bound': t_node_bound}
 
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
         A_hst = input_dict['A_hst']
@@ -745,6 +743,10 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, mo
     X0 = inputs['X0']
     Xf = inputs['Xf']
     U_arc_hst = inputs['U_arc_hst'].reshape(N_arcs,3)
+    if cfg_args.adaptive_mesh_type.lower() == 'fixed':
+        t_node_bound = dyn_args['t_node_bound']
+    elif cfg_args.adaptive_mesh_type.lower() == 'adaptive_fixedtof':
+        t_node_bound = inputs['t_node_bound']
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
         gain_weights = inputs['gain_weights'].reshape(N_arcs,2)
     if cfg_args.free_phasing:
@@ -778,7 +780,7 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, mo
     # Propagate state and first-order jacobians forward (to half) ------------------------
     # ------------------------------------------------------------------------------------
     X0_true_f = X0
-    forward_input_dict = {'X0_true_f': X0_true_f, 'X_hst': X_hst, 'U_arc_hst': U_arc_hst}
+    forward_input_dict = {'X0_true_f': X0_true_f, 'X_hst': X_hst, 'U_arc_hst': U_arc_hst, 't_node_bound': t_node_bound}
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
         forward_input_dict['A_hst'] = A_hst
         forward_input_dict['B_hst'] = B_hst
@@ -802,7 +804,7 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, mo
     # Propagate dynamics backwards (to half) ---------------------------------------------
     # ------------------------------------------------------------------------------------
     X0_true_b = Xf
-    backward_input_dict = {'X0_true_b': X0_true_b, 'X_hst': X_hst, 'U_arc_hst': U_arc_hst}
+    backward_input_dict = {'X0_true_b': X0_true_b, 'X_hst': X_hst, 'U_arc_hst': U_arc_hst, 't_node_bound': t_node_bound}
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
         backward_input_dict['A_hst'] = A_hst
         backward_input_dict['B_hst'] = B_hst
@@ -849,22 +851,27 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, mo
 
     # Objective and Constraints ouputs ------------------------------------------------
     # ---------------------------------------------------------------------------------
-    arc_length_hst = jnp.diff(dyn_args['t_node_bound'])
-    time_normal_thrust = control_norms*arc_length_hst # Time-normalized thrust
-    J_det = jnp.sum(time_normal_thrust)
+    arc_length_hst = jnp.diff(t_node_bound)
+    J_det = control_norms.T @ arc_length_hst
+
+    if cfg_args.adaptive_mesh_type.lower() != 'fixed':
+        dt_even = (t_node_bound[-1] - t_node_bound[0]) / N_arcs
+        rel_dt_err = arc_length_hst / dt_even - 1.0
+
+        J_mesh = 1e-6 * rel_dt_err.T @ rel_dt_err
+        J_det = J_det + J_mesh
 
     if cfg_args.det_or_stoch.lower() == 'deterministic':
-        output_dict['o_mf'] = J_det # objective - minimizing sum of control norms
+        output_dict['o'] = J_det # objective - minimizing sum of control norms
         output_dict['c_Us'] = control_norms.flatten() # constraint - control norm
     elif cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
         control_max_eig = cfg_args.mx_tcm_bound * jnp.sqrt(mat_lmax_vmap(P_U_arc_hst))
 
-        time_normal_stat_thrust = control_max_eig*arc_length_hst
-        J_stat = jnp.sum(time_normal_stat_thrust)
-        output_dict['o_mf'] = J_det + J_stat # objective - minimizing sum of control norms and max eigenvalues of control covariances
+        J_stat = control_max_eig.T @ arc_length_hst
+        output_dict['o'] = J_det + J_stat # objective - minimizing sum of control norms and max eigenvalues of control covariances
         output_dict['c_Us'] = control_norms.flatten() + control_max_eig.flatten() # constraint - stochastic control norm
-        Af = propagators['propagator_dX0_e'](Xf,jnp.zeros((3,)), dyn_args['t_node_bound'][-1], 
-                                             dyn_args['t_node_bound'][-1]+dyn_args['tf_T'], cfg_args)
+        Af = propagators['propagator_dX0_e'](Xf,jnp.zeros((3,)), t_node_bound[-1], 
+                                             t_node_bound[-1]+dyn_args['tf_T'], cfg_args)
         S_XT_targ_inv = dyn_args['S_XT_targ_inv']
         S_Xf_targ_inv = S_XT_targ_inv @ Af
         if cfg_args.feedback_type.lower() == 'true_state':
@@ -909,7 +916,7 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, mo
     if cfg_args.det_or_stoch.lower() == 'deterministic':
         base_str = "J: {:.3e}, X0: {:.0e}, Xf: {:.0e}, X_mp: {:.0e},    Col: {:.0e}"
 
-        jax.debug.print(base_str, output_dict['o_mf'], 
+        jax.debug.print(base_str, output_dict['o'], 
                         jnp.max(jnp.abs(output_dict['c_X0'])), 
                         jnp.max(jnp.abs(output_dict['c_Xf'])), 
                         jnp.max(jnp.abs(output_dict['c_X_mp'])), 
@@ -933,10 +940,13 @@ def objective_and_constraints(inputs, Boundary_Conds, iterators, propagators, mo
 # ------------------
 def sim_Det_traj(sol, Sys, propagators, models, dyn_args, cfg_args):
     # Unpack inputs
-    t_node_bound = dyn_args['t_node_bound']
     X0_det = sol.xStar['X0']
     Xf_det = sol.xStar['Xf']
     U_arc_hst = sol.xStar['U_arc_hst'].reshape(cfg_args.N_arcs, 3)
+    if cfg_args.adaptive_mesh_type.lower() == 'fixed':
+        t_node_bound = dyn_args['t_node_bound']
+    elif cfg_args.adaptive_mesh_type.lower() == 'adaptive_fixedtof':
+        t_node_bound = sol.xStar['t_node_bound']
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
         gain_weights = sol.xStar['gain_weights'].reshape(cfg_args.N_arcs, 2)
 
@@ -1215,11 +1225,11 @@ def sim_Det_traj(sol, Sys, propagators, models, dyn_args, cfg_args):
 
 def single_MC_trial(rng_key, inputs, Sys, dyn_args, cfg_args, propagators, models):
     # Unpack inputs
-    t_node_bound = dyn_args['t_node_bound']
     det_X_node_hst = inputs['det_X_node_hst']
     det_U_arc_hst = inputs['det_U_arc_hst']
     K_arc_hst = inputs['K_arc_hst']
     dV_mean = inputs['dV_mean']
+    t_node_bound = inputs['t_node_bound']
 
     # Unpack propagators
     propagator_e = propagators['propagator_e']

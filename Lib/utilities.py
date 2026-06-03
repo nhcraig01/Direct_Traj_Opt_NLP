@@ -72,7 +72,7 @@ def process_sparsity(grad_nonsparse):
     
     return grad_sparse
 
-def process_config(config, det_or_stoch: str, feedback_control_type: str, gain_parametrization_type: str, measurements: tuple):
+def process_config(config, det_or_stoch: str, feedback_control_type: str, gain_parametrization_type: str, adaptive_mesh_type: str, measurements: tuple):
     """ This function processes the configuration file and returns the optimization arguments and boundary conditions
     """
     # Name
@@ -256,6 +256,7 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str, gain_p
         feedback_type: str
         measurements: tuple
         gain_param_type: str
+        adaptive_mesh_type: str
         r_tol: float
         a_tol: float
         N_nodes: int
@@ -280,7 +281,7 @@ def process_config(config, det_or_stoch: str, feedback_control_type: str, gain_p
         mx_tcm_bound: float
         mx_dV_bound: float
         mx_col_bound: float
-    cfg_args = args_static(cfg_name, det_or_stoch, feedback_control_type, measurements, gain_parametrization_type, r_tol, a_tol, N_nodes, N_arcs, N_subarcs, N_trials, 
+    cfg_args = args_static(cfg_name, det_or_stoch, feedback_control_type, measurements, gain_parametrization_type, adaptive_mesh_type, r_tol, a_tol, N_nodes, N_arcs, N_subarcs, N_trials, 
                            N_save, arc_length_det, arc_length_opt, transfer_length_det, post_insert_length, length, meas_dim, ve, U_Acc_min_nd, 
                            True if phasing == 'free' else False, det_col_avoid, stat_col_avoid, alpha_UT, beta_UT, kappa_UT, 
                            mx_tcm_bound, mx_dV_bound, mx_col_bound)
@@ -315,6 +316,9 @@ def make_InitGuess(Problem_Type, Gain_Parametrization_Type, Node_Resampling, Bou
         'U_arc_hst': U_arc_rand.flatten(),
         'X0': jnp.hstack([Boundary_Conds['X0_init'], 1]),
         'Xf': jnp.hstack([Boundary_Conds['Xf_init'], 0.95])}
+    
+    if cfg_args.adaptive_mesh_type.lower() == 'adaptive_fixedtof':
+        init_guess['t_node_bound'] = dyn_args['t_node_bound']
 
     if cfg_args.free_phasing:
         init_guess['alpha'] = Boundary_Conds['alpha_min']
@@ -347,6 +351,7 @@ def make_InitGuess(Problem_Type, Gain_Parametrization_Type, Node_Resampling, Bou
         if Node_Resampling is not None:
             t_node_bound = node_EpochSampling(t_node_bound_hot, U_arc_hst_hot, cfg_args.N_nodes, Node_Resampling)
             dyn_args['t_node_bound'] = t_node_bound
+            init_guess['t_node_bound'] = t_node_bound
 
         # Interpolate control history onto new time arrays
         for i in range(t_node_bound.shape[0] - 1):
@@ -406,7 +411,7 @@ def node_EpochSampling(t_node_bound, U_arc_hst, N_nodes, Node_Resampling):
 
     return t_node_sampled
 
-def density_arcwise_burns(U_arc_hst, U_thresh: float = 1e-3, rho_burn: float = 1.0, rho_coast: float = 0.1):
+def density_arcwise_burns(U_arc_hst, U_thresh: float = 1e-3, rho_burn: float = 1.0, rho_coast: float = 0.2):
     U_mag_hst = jnp.linalg.norm(U_arc_hst, axis=1)
     burn_mask = U_mag_hst > U_thresh
     rho_arc = jnp.where(burn_mask, rho_burn, rho_coast)
@@ -553,8 +558,6 @@ def prepare_opt_funcs(Boundary_Conds, iterators, propagators, models, Sys, dyn_a
 # -------------------------------
 
 def prepare_sol(solution, Sys, Boundary_Conds, propagators, models, dyn_args, cfg_args):
-    
-    t_node_bound = dyn_args['t_node_bound']
 
     # Set up ouput dictionary
     output = {}
@@ -577,6 +580,11 @@ def prepare_sol(solution, Sys, Boundary_Conds, propagators, models, dyn_args, cf
 
     print("Evaluating Detailed Deterministic Trajectory...")
     output['Det'] = sim_Det_traj(solution, Sys, propagators, models, dyn_args, cfg_args)
+
+    if cfg_args.adaptive_mesh_type.lower() == 'fixed':
+        t_node_bound = dyn_args['t_node_bound']
+    elif cfg_args.adaptive_mesh_type.lower() == 'adaptive_fixedtof':
+        t_node_bound = solution.xStar['t_node_bound']
 
     # Run Monte Carlo Simulations
     if cfg_args.det_or_stoch.lower() == 'stochastic_gauss_zoh':
@@ -694,7 +702,11 @@ def save_OptimizerSol(solution, cfg_arg, dyn_args, save_loc: str):
         f.create_dataset("X0", data=solution.xStar['X0'])
         f.create_dataset("Xf", data=solution.xStar['Xf'])
         f.create_dataset("U_arc_hst", data=solution.xStar['U_arc_hst'])
-        f.create_dataset("t_node_bound", data=dyn_args['t_node_bound'])
+        if cfg_arg.adaptive_mesh_type.lower() == 'fixed':
+            t_node_bound = dyn_args['t_node_bound']
+        elif cfg_arg.adaptive_mesh_type.lower() == 'adaptive_fixedtof':
+            t_node_bound = solution.xStar['t_node_bound']
+        f.create_dataset("t_node_bound", data=t_node_bound)
         if cfg_arg.free_phasing:
             f.create_dataset("alpha", data=solution.xStar['alpha'])
             f.create_dataset("beta", data=solution.xStar['beta'])

@@ -1,5 +1,6 @@
 # Direct Trajectory Optimization
 import jax
+import jax.numpy as jnp
 jax.config.update('jax_enable_x64', True)
 jax.config.update('jax_platform_name', 'cpu')
 
@@ -14,6 +15,7 @@ from dataclasses import replace
 from Lib.utilities import yaml_load, process_config, process_sparsity, prepare_prop_funcs, prepare_opt_funcs, prepare_sol, save_sol, save_OptimizerSol, load_OptimizerSol, make_InitGuess
 
 # Math
+from Lib.math import adaptive_mesh_con_terms
 
 # Dynamics
 from Lib.dynamics import eoms_gen, propagator_gen
@@ -29,12 +31,17 @@ if __name__ == "__main__":
     #   L2_S-HO_to_L1_Lyap
     #   L2_S-HO_to_L4_N-Axial
     #   Sandbox
-    folder_name = "L2_S-HO_to_L1_Lyap"
+    folder_name = "Sandbox"
 
     # Problem Types:
     #   deterministic
     #   stochastic_gauss_zoh
-    Problem_Type = "stochastic_gauss_zoh"
+    Problem_Type = "deterministic"
+
+    # Adaptive Mesh:
+    #   fixed
+    #   adaptive_fixedtof
+    Adaptive_Mesh_Type = "fixed"
 
     # Gain Parameterization Types:
     #   arc_lqr
@@ -44,7 +51,7 @@ if __name__ == "__main__":
     # Feedback Controller Types:
     #   true_state
     #   estimated_state
-    Feedback_Control_Type = "estimated_state" 
+    Feedback_Control_Type = "true_state" 
 
     # Measurement Types (only applies for estimated state feedback): 
     #   position
@@ -58,7 +65,7 @@ if __name__ == "__main__":
     #   deterministic
     #   stochastic_gauss_zoh_true_state
     #   stochastic_gauss_zoh_estimated_state_{measurements}
-    Hot_Start_Sol = "stochastic_gauss_zoh_estimated_state_range_range-rate_angles"
+    Hot_Start_Sol = None
 
     # Node Resampling (only applies if hot start solution is not None):
     #   None
@@ -86,7 +93,7 @@ if __name__ == "__main__":
     optOptions = {'Major optimality tolerance': 1e-5,   # Keep here
                   'Major feasibility tolerance': 1e-6,  # Keep here - Changes how tightly the constraints are met
                   'Minor feasibility tolerance': 1e-6,  # Similar to above but for the QP sub-problem
-                  'Major iterations limit': 0,
+                  'Major iterations limit': 1000,
                   'Partial prince': 1,                  # Keep here - Impacts the number of variales to examine in the gradient search (larger is fewer)
                   'Linesearch tolerance': .99,          # Keep here - Sets the level of accuracy to find in the quadratic sub problem
                   'Function precision': 1e-10,          # Keep a few (2 to 3) orders of magnitude above the integration tolerances to keep SNOPT from seeing noise
@@ -96,10 +103,10 @@ if __name__ == "__main__":
                   'Elastic weight': 1.e4}
     # ---------------------------------------------------------------------------
 
-
+    
     # Process Configuration - System Constants, optimization arguments, boundary conditions, dynamical eoms, and optimization type
     config = yaml_load(config_file)
-    Sys, models, Boundary_Conds, cfg_args, dyn_args = process_config(config, Problem_Type, Feedback_Control_Type, Gain_Parametrization_Type, Measurements)
+    Sys, models, Boundary_Conds, cfg_args, dyn_args = process_config(config, Problem_Type, Feedback_Control_Type, Gain_Parametrization_Type, Adaptive_Mesh_Type, Measurements)
 
     # Propagation functions
     eom_e, propagators, iterators = prepare_prop_funcs(eoms_gen, models, propagator_gen, dyn_args, replace(cfg_args, N_save=2))
@@ -109,7 +116,7 @@ if __name__ == "__main__":
 
     # Set up initial guess and hot starter
     print("Setting Up Initial Guess")
-    U_rng_vals = {'key': 3, 'var': 1e-3}
+    U_rng_vals = {'key': 1, 'var': 1e-3}
     init_guess, dyn_args = make_InitGuess(Problem_Type, Gain_Parametrization_Type, Node_Resampling, Boundary_Conds, cfg_args, dyn_args, U_rng_vals, hot_start_file)
 
 
@@ -121,16 +128,28 @@ if __name__ == "__main__":
 
     # Optimal Control Problem
     optprop = Optimization("Forward Backward Direct Trajectory Optimization", vals)
+
+    # Create Variables
     optprop.addVarGroup('U_arc_hst', 3*cfg_args.N_arcs, "c", value = init_guess['U_arc_hst'], lower = -1, upper = 1)
     optprop.addVarGroup('X0', 7, "c", value = init_guess['X0'], lower=[-10, -10, -10, -10, -10, -10, 1e-1], upper=[10, 10, 10, 10, 10, 10, 1])
     optprop.addVarGroup('Xf', 7, "c", value = init_guess['Xf'], lower=[-10, -10, -10, -10, -10, -10, 1e-1], upper=[10, 10, 10, 10, 10, 10, 1])
+    if Adaptive_Mesh_Type.lower() == 'adaptive_fixedtof':
+        optprop.addVarGroup('t_node_bound', cfg_args.N_nodes, "c", value = init_guess['t_node_bound'], lower = 0, upper = init_guess['t_node_bound'][-1])
     if Problem_Type == 'stochastic_gauss_zoh':
         optprop.addVarGroup('gain_weights', cfg_args.N_arcs*2, "c", value = init_guess['gain_weights'], lower = 1e-6)
     if cfg_args.free_phasing:
         optprop.addVarGroup('alpha', 1, "c", value = init_guess['alpha'], lower = Boundary_Conds['alpha_min'], upper = Boundary_Conds['alpha_max'])
         optprop.addVarGroup('beta', 1, "c", value = init_guess['beta'], lower = Boundary_Conds['beta_min'], upper = Boundary_Conds['beta_max'])
-    optprop.addObj('o_mf')
+
+    # Create Objective
+    optprop.addObj('o')
+
+    # Create Constraints
     optprop.addConGroup('c_Us', cfg_args.N_arcs, upper = 1, jac = grad_proc_sparse['c_Us'])
+    if Adaptive_Mesh_Type.lower() == 'adaptive_fixedtof':
+        mesh_con_terms = adaptive_mesh_con_terms(init_guess['t_node_bound'])
+        optprop.addConGroup('c_t_node_bound', cfg_args.N_nodes+1, 
+                            linear=True, wrt = 't_node_bound', lower = mesh_con_terms['lower'], upper = mesh_con_terms['upper'], jac = {'t_node_bound': mesh_con_terms['jac']})
     if Problem_Type == 'stochastic_gauss_zoh':
         optprop.addConGroup('c_P_Xf', 1, upper = 0, jac = grad_proc_sparse['c_P_Xf'])
     optprop.addConGroup('c_X0', 7, lower = 0, upper = 0, jac = grad_proc_sparse['c_X0'])
@@ -141,6 +160,7 @@ if __name__ == "__main__":
     if cfg_args.stat_col_avoid and Problem_Type != 'deterministic':
         optprop.addConGroup('c_stat_col_avoid', cfg_args.N_nodes, upper = 0, jac = grad_proc_sparse['c_stat_col_avoid'])
     
+    # Run Optimization
     print('SNOPT Starting')
     start_time = time.time()
     optSNOPT = SNOPT(options = optOptions)
