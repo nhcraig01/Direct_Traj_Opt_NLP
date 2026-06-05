@@ -148,6 +148,32 @@ def TrueStateFeedback_CovPropagators():
 
     return cov_propagators
 
+def TrueStateFeedback_SqCovPropagators():
+    def sub_Arc_iterator(j,input_dict)
+        # Unpack unmodified input terms
+        A_js = input_dict['A_js']
+        B_js = input_dict['B_js']
+        K_arc = input_dict['K_arc']
+        G_stoch_arc = input_dict['G_stoch_arc']
+        G_exe_arc = input_dict['G_exe_arc']
+
+        # Unpack modified input terms
+        S_js = input_dict['S_js']
+
+        # Create the augmented system matrices
+        S_j = S_js[j,:,:]
+        A_j = A_js[j,:,:]
+        B_j = B_js[j,:,:]
+        P_u_arc = G_stoch_arc + G_exe_arc
+        A_aug = jnp.block([[A_j, B_j@K_arc, B_j],
+                           [jnp.zeros((10,17))]])
+        S_j1 = jnp.linalg.qr((A_aug@S_j).T, mode='r')[0].T
+
+        # Pick up here when ready to continue work on square root covariance
+        # propagation and what not. Going to check out Claude AI and see what
+        # it has to say about making all this better and maybe more object
+        # oriented and less dict passing and more elegant.
+
 def EstimatedStateFeedback_CovPropagators():
     def subArc_iterator(j, input_dict):
 
