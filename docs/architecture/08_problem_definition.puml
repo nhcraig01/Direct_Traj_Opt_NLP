@@ -1,0 +1,77 @@
+@startuml 08_problem_definition
+
+title Problem Definition and build_problem() Factory
+
+class ProblemDefinition {
+  +Sys : dict
+  +Boundary_Conds : dict
+  +N_arcs : int
+  +N_nodes : int
+  +N_subarcs : int
+  +toggles : dict
+}
+
+note right of ProblemDefinition
+  Replaces today's split of cfg_args /
+  dyn_args / Sys / Boundary_Conds. Pure
+  config/constants - no model objects or
+  prepared callables live here.
+
+  Built ONCE, up front, by build_problem().
+  Stored as a private attribute on
+  Propagator, GainParameterization,
+  FeedbackControlMethod, and Constraint
+  subclasses at construction time. Never
+  passed through evaluate(inputs) - inputs
+  (the optimization variables dict) is the
+  only thing traced through jit/jacfwd.
+
+  Today's "models" dict (dynamics + measurement
+  models) is NOT part of ProblemDefinition -
+  each piece now lives where it's used:
+    - dynamics model -> EquationsOfMotion,
+      composed by Propagator (07_propagator.puml)
+    - measurement model -> -measurement_model :
+      MeasurementModel on EstimatedStateFeedback
+      (02_feedback_control_method.puml)
+  Both are constructed from problem_def.Sys /
+  problem_def.Boundary_Conds during
+  build_problem(), but problem_def itself stays
+  pure data.
+end note
+
+class "build_problem(config, toggles)" as build_problem << function >>
+
+note bottom of build_problem
+  High-level factory - the single entry
+  point that assembles everything:
+
+  1. problem_def = build_problem_def(config, toggles)
+  2. eom = CR3BPDynamics(problem_def)
+       (future: other EquationsOfMotion subclasses)
+  3. propagator  = StatePropagator(eom, problem_def) or
+                    SensitivityPropagator(eom, problem_def)
+  4. gain_param  = LQRArcGains(...) / LQRFullTrajGains(...)
+                    (StochasticTOP only)
+  5. controller  = TrueStateFeedback(...) /
+                    EstimatedStateFeedback(measurement_model, problem_def)
+                    (StochasticTOP only)
+  6. constraints_list = [...] - one instance per active
+       toggle, each injected with the problem_def slices
+       and/or propagator references it needs
+       (see 05_constraints.puml)
+  7. top = DeterministicTOP(propagator, constraints_list, problem_def)
+        or StochasticTOP(propagator, gain_param, controller,
+                          constraints_list, problem_def)
+  8. init_guess = make_InitGuess(...)
+  9. return top, init_guess
+
+  Returns (top, init_guess). Caller then
+  does: optprob, sens = top.to_pyoptsparse(init_guess)
+  (see 09_optimization_adapter.puml).
+end note
+
+build_problem ..> ProblemDefinition : creates
+build_problem ..> "TrajectoryOptimizationProblem" : creates & returns
+
+@enduml

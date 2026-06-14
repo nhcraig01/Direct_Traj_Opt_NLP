@@ -1,0 +1,80 @@
+@startuml 09_optimization_adapter
+
+title TOP -> PyOptSparse Adapter (to_pyoptsparse)
+
+abstract class TrajectoryOptimizationProblem {
+  +variables() : List<OptimizationVariable>
+  +constraints() : List<Constraint>
+  +evaluate(inputs) : dict
+  +to_pyoptsparse(init_guess) : (Optimization, sens)
+}
+
+note left of TrajectoryOptimizationProblem
+  variables(), constraints(), and evaluate()
+  shown here only as the three methods
+  to_pyoptsparse() consumes - see
+  01_top_overview.puml for the full
+  interface (propagate(), objective(), etc.).
+end note
+
+class OptimizationVariable {
+  +name : str
+  +size : int
+  +lower
+  +upper
+  +value
+}
+
+abstract class Constraint {
+  +name : str
+  +size : int
+  +lower
+  +upper
+  +linearities : Dict<str, array>
+  +evaluate(inputs, traj_state, error_state) : array
+}
+
+TrajectoryOptimizationProblem "1" o-- "many" OptimizationVariable : variables()
+TrajectoryOptimizationProblem "1" o-- "many" Constraint : constraints_list
+
+note bottom of Constraint
+  linearities defaults to {}. Only populated
+  at construction time when the constraint is
+  FULLY linear in every variable it depends on
+  (today: AdaptiveMeshConstraint only). Its keys
+  are the "wrt" variable names. Never partially
+  populated - pyOptSparse's addConGroup(linear=...)
+  is an all-or-nothing flag per constraint group,
+  so a partially-linear dict would be misleading.
+end note
+
+note bottom of TrajectoryOptimizationProblem
+  to_pyoptsparse(init_guess):
+  1. optprob = Optimization(name, self.evaluate)
+  2. for v in self.variables():
+       optprob.addVarGroup(v.name, v.size, "c",
+         value=init_guess[v.name], lower=v.lower, upper=v.upper)
+  3. optprob.addObj('o')
+  4. grad = jit(jacfwd(self.evaluate))
+     grad_nonsparse = grad(init_guess)
+     grad_sparse = process_sparsity(grad_nonsparse)
+  5. for c in self.constraints():
+       if c.linearities:
+         optprob.addConGroup(c.name, c.size, lower=c.lower, upper=c.upper,
+           linear=True, wrt=list(c.linearities.keys()), jac=c.linearities)
+       else:
+         optprob.addConGroup(c.name, c.size, lower=c.lower, upper=c.upper,
+           linear=False, wrt=list(grad_sparse[c.name].keys()), jac=grad_sparse[c.name])
+  6. sens = jit(lambda inputs, cvals: grad(inputs))
+  7. return optprob, sens
+
+  Caller then runs:
+    sol = SNOPT(options=optOptions)(optprob, sens=sens, timeLimit=None)
+
+  Intentionally PyOptSparse-specific - no
+  separate solver-adapter abstraction. A
+  future solver swap would mean replacing
+  this one method.
+end note
+
+@enduml

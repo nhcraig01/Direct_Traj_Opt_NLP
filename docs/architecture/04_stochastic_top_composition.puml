@@ -1,0 +1,140 @@
+@startuml 04_stochastic_top_composition
+
+title StochasticTOP - Composition of Orthogonal Strategies
+
+abstract class TrajectoryOptimizationProblem {
+  -propagator : Propagator
+  -constraints_list : List<Constraint>
+  -problem_def : ProblemDefinition
+  +variables() : List<OptimizationVariable>
+  +propagate(inputs) : (TrajectoryState, ErrorDynamics?)
+  +objective(inputs, traj_state, error_state) : float
+  +constraints() : List<Constraint>
+  +evaluate(inputs) : dict
+  +to_pyoptsparse(init_guess) : (Optimization, sens)
+}
+
+class StochasticTOP {
+  -gain_param : GainParameterization
+  -controller : FeedbackControlMethod
+  +variables() : List<OptimizationVariable>
+  +objective(inputs, traj_state, error_state) : float
+  +evaluate(inputs) : dict
+}
+
+TrajectoryOptimizationProblem <|-- StochasticTOP
+
+class SensitivityPropagator {
+  +propagate(inputs, problem_def) : (TrajectoryState, ErrorDynamics)
+}
+
+abstract class GainParameterization {
+  +variables() : List<OptimizationVariable>
+  +compute_gains(inputs, error_dynamics, problem_def) : ErrorDynamics
+}
+class LQRArcGains
+class LQRFullTrajGains
+GainParameterization <|-- LQRArcGains
+GainParameterization <|-- LQRFullTrajGains
+
+abstract class FeedbackControlMethod {
+  +init_cov_state(problem_def) : <internal>
+  +augment_error_dynamics(error_dynamics) : ErrorDynamics
+  +propagate_cov(error_dynamics, cov_state, problem_def) : ErrorState
+}
+class TrueStateFeedback
+class EstimatedStateFeedback {
+  -measurement_model : MeasurementModel
+}
+FeedbackControlMethod <|-- TrueStateFeedback
+FeedbackControlMethod <|-- EstimatedStateFeedback
+
+StochasticTOP "1" o-- "1" SensitivityPropagator : propagator
+StochasticTOP "1" o-- "1" GainParameterization : gain_param
+StochasticTOP "1" o-- "1" FeedbackControlMethod : controller
+
+abstract class Constraint {
+  +name : str
+  +size : int
+  +lower
+  +upper
+  +linearities : Dict<str, array>
+  +evaluate(inputs, traj_state, error_state) : array
+}
+StochasticTOP "1" o-- "many" Constraint : constraints_list
+
+class TrajectoryState {
+  +X_hst
+  +t_hst
+  +t_node_bound
+}
+
+class ErrorDynamics {
+  +A_hst
+  +B_hst
+  +A_arc_hst
+  +B_arc_hst
+  +H_hst
+  +P_v_hst
+  +K_arc_hst
+  +G_exe_arc_hst
+}
+
+class ErrorState {
+  +P_hst
+  +P_U_arc_hst
+}
+
+class OptimizationVariable {
+  +name : str
+  +size : int
+  +lower
+  +upper
+  +value
+}
+
+note bottom of StochasticTOP
+  evaluate(inputs):
+  1. traj, err_dyn = self.propagate(inputs)
+     (= propagator.propagate(inputs, problem_def), inherited)
+  2. err_dyn = controller.augment_error_dynamics(err_dyn)
+  3. err_dyn = gain_param.compute_gains(inputs, err_dyn, problem_def)
+     -- populates err_dyn.K_arc_hst
+  4. err_dyn = err_dyn._replace(
+        G_exe_arc_hst=gates2Gexe_vmap(inputs['U_arc_hst'], problem_def.gates))
+     -- free function
+  5. cov0 = controller.init_cov_state(problem_def)
+  6. error_state = controller.propagate_cov(err_dyn, cov0, problem_def)
+  7. J = self.objective(inputs, traj, error_state)
+  8. for c in self.constraints(): c.evaluate(inputs, traj, error_state)
+
+  gain_param and controller are chosen
+  independently at build_problem() time -
+  any combination is valid. propagator is
+  fixed by problem type (see
+  07_propagator.puml).
+
+  K_arc_hst and G_exe_arc_hst are fields of
+  ErrorDynamics, populated during steps 3-4
+  via _replace() (zero-cost under jit) - see
+  06_data_structures.puml.
+end note
+
+note right of GainParameterization
+  Populates error_dynamics.K_arc_hst from
+  inputs and the sensitivities already in
+  error_dynamics. Used identically by
+  controller regardless of which subclass
+  produced it.
+end note
+
+note right of FeedbackControlMethod
+  Consumes error_dynamics (including
+  K_arc_hst/G_exe_arc_hst, however they were
+  produced) to propagate error/covariance and
+  return a standardized ErrorState. Does NOT
+  compute objective/constraint values itself -
+  see 02_feedback_control_method.puml.
+end note
+
+@enduml

@@ -1,0 +1,184 @@
+@startuml 05_constraints
+
+title Constraint - Hierarchy
+
+abstract class Constraint {
+  +name : str
+  +size : int
+  +lower : array
+  +upper : array
+  +linearities : Dict<str, array>
+  +evaluate(inputs, traj_state, error_state) : array
+}
+
+note bottom of Constraint
+  error_state may be None for
+  DeterministicTOP - constraints that don't
+  use it (MatchPointConstraint,
+  FixedBoundaryConstraint, etc.) simply ignore
+  the argument; ControlNormConstraint branches
+  on whether it is None.
+
+  linearities defaults to {} - populated at
+  construction ONLY when the constraint is
+  fully linear (today: AdaptiveMeshConstraint
+  only). Its keys ARE the "wrt" variable names
+  and its values the corresponding constant
+  Jacobian blocks - no separate "wrt" field is
+  needed. See 09_optimization_adapter.puml for
+  how to_pyoptsparse() uses this.
+
+  Constraints do NOT contribute optimization
+  variables (no variables() method) - every
+  variable is declared in one place by
+  TOP.variables(), driven by problem_def
+  toggles. See 01_top_overview.puml.
+end note
+
+class FixedBoundaryConstraint {
+  -boundary : "initial" | "final"
+  +evaluate(inputs, traj_state, error_state) : array
+}
+
+class FreeBoundaryConstraint {
+  -boundary : "initial" | "final"
+  -orbit_family : OrbitFamilyInterpolant
+  +evaluate(inputs, traj_state, error_state) : array
+}
+
+note right of FixedBoundaryConstraint
+  c_X0 / c_Xf when phasing_type == "fixed".
+  evaluate(): X0[:7] - [X_start, 1.0]  (or
+  Xf[:6] - X_end for boundary="final").
+  One instance per boundary (constructed
+  twice by build_problem(), not via
+  subclassing per-boundary).
+end note
+
+note right of FreeBoundaryConstraint
+  c_X0 / c_Xf when phasing_type == "free".
+  evaluate(): X0[:7] - [orbit_family
+  .evaluate(alpha), 1.0] (or analogous for
+  Xf/beta), reading "alpha"/"beta" from
+  inputs. These variables (size/bounds from
+  the orbit_family interpolant + config.yaml
+  alpha/beta min/max) are declared by
+  TOP.variables() when phasing_type ==
+  "free", not by this constraint.
+end note
+
+Constraint <|-- FixedBoundaryConstraint
+Constraint <|-- FreeBoundaryConstraint
+
+class MatchPointConstraint {
+  +evaluate(inputs, traj_state, error_state) : array
+}
+Constraint <|-- MatchPointConstraint
+
+note right of MatchPointConstraint
+  c_X_mp - X_hst[indx_f[-1],-1,:7] -
+  X_hst[indx_b[-1],0,:7]. Identical for
+  DeterministicTOP and StochasticTOP; only
+  reads traj_state.
+end note
+
+class ControlNormConstraint {
+  +evaluate(inputs, traj_state, error_state) : array
+}
+Constraint <|-- ControlNormConstraint
+
+note right of ControlNormConstraint
+  c_Us. Always includes control_norms
+  (from inputs['U_arc_hst']).
+  If error_state is not None, additionally
+  adds control_max_eig =
+  mx_tcm_bound * sqrt(mat_lmax_vmap(
+  error_state.P_U_arc_hst)) - this branch
+  is the only feedback-type-agnostic
+  "stochastic vs not" check left, and it's
+  just "do I have an error_state", not a
+  type check on the controller.
+end note
+
+class CovarianceConstraint {
+  -propagator_dX0_e : <jacfwd fn>
+  +evaluate(inputs, traj_state, error_state) : array
+}
+Constraint <|-- CovarianceConstraint
+
+note right of CovarianceConstraint
+  c_P_Xf. Stochastic only (not constructed
+  for DeterministicTOP).
+  -propagator_dX0_e is injected at
+  construction time (same prepared jacfwd fn
+  as SensitivityPropagator.propagate_arc_dX0,
+  see 07_propagator.puml).
+  evaluate(): Af = propagator_dX0_e(Xf, ...)
+  (from traj_state/problem_def);
+  S_Xf_targ_inv = S_XT_targ_inv @ Af;
+  log10(mat_lmax(S_Xf_targ_inv @
+  error_state.P_hst[-1,-1] @
+  S_Xf_targ_inv.T - I) + 1).
+  Otherwise a pure function of (traj_state,
+  error_state, problem_def) - no reference to
+  controller, thanks to ErrorState
+  standardization.
+end note
+
+class AdaptiveMeshConstraint {
+  +evaluate(inputs, traj_state, error_state) : array
+}
+Constraint <|-- AdaptiveMeshConstraint
+
+note right of AdaptiveMeshConstraint
+  Only constructed when mesh_type ==
+  "adaptive_fixedtof". "t_node_bound" is
+  declared by TOP.variables() for this
+  toggle, not by this constraint.
+  linearities = {'t_node_bound': jac} is
+  populated at construction time from
+  adaptive_mesh_con_terms() (math.py) -
+  the constraint is fully linear, independent
+  of inputs.
+  Note: this toggle ALSO adds a J_mesh term
+  to the objective (1e-6 * rel_dt_err.T @
+  rel_dt_err) - a cross-cutting concern not
+  modeled by Constraint itself; objective()
+  checks problem_def.mesh_type directly.
+end note
+
+class DetCollisionAvoidanceConstraint {
+  +evaluate(inputs, traj_state, error_state) : array
+}
+class StatCollisionAvoidanceConstraint {
+  +evaluate(inputs, traj_state, error_state) : array
+}
+
+Constraint <|-- DetCollisionAvoidanceConstraint
+Constraint <|-- StatCollisionAvoidanceConstraint
+
+note right of DetCollisionAvoidanceConstraint
+  c_det_col_avoid. col_avoid_vmap(X_node_hst,
+  problem_def) - only reads traj_state.
+  Constructed when det_col_avoid == true.
+end note
+
+note right of StatCollisionAvoidanceConstraint
+  c_stat_col_avoid. stat_col_avoid_vmap(
+  X_node_hst, P_node_hst, problem_def) where
+  P_node_hst is built directly from
+  error_state.P_hst at each node.
+  Constructed when stat_col_avoid == true
+  (stochastic only).
+
+  Note: this is a CORRECTNESS FIX vs. current
+  code - today P_node_hst is built from
+  P_hst which only exists for true_state;
+  estimated_state silently breaks. With
+  ErrorState standardized, error_state.P_hst
+  exists identically for both, so this
+  constraint works for either controller with
+  no special-casing.
+end note
+
+@enduml

@@ -1,5 +1,10 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
-    "python.languageServer": "Pylance"
+    "python.languageServer": "Pylance",
+    "plantuml.render": "Local",
+    "plantuml.diagramsRoot": "docs/architecture",
+    "plantuml.exportOutDir": "docs/architecture/_rendered",
+    "plantuml.exportFormat": "svg",
+    "plantuml.exportSubFolder": false
 }
