@@ -1,0 +1,62 @@
+@startuml 07_gain_parameterization
+
+title Gain Parameterization - Hierarchy
+
+abstract class GainParameterization {
+  +variables() : List<OptimizationVariable>
+  +compute_gains(inputs, error_dynamics, problem_def) : ErrorDynamics
+}
+
+class LQRArcGains {
+  +variables() : List<OptimizationVariable>
+  +compute_gains(inputs, error_dynamics, problem_def) : ErrorDynamics
+}
+
+class LQRFullTrajGains {
+  +variables() : List<OptimizationVariable>
+  +compute_gains(inputs, error_dynamics, problem_def) : ErrorDynamics
+}
+
+note right of LQRArcGains
+  variables(): "gain_weights" sized
+  N_arcs x 2 (Q/R weight scalars
+  per arc).
+  compute_gains(): solves a per-arc
+  LQR using error_dynamics.A_arc_hst/
+  B_arc_hst and the weights, then returns
+  error_dynamics._replace(K_arc_hst=...).
+  Maps to "arc_lqr" in
+  GainParameterizers() (dynamics.py).
+end note
+
+note right of LQRFullTrajGains
+  variables(): "gain_weights" with a
+  single (or small) set of weights
+  applied across the full trajectory.
+  compute_gains(): same LQR machinery
+  as LQRArcGains, but weights are
+  shared/broadcast across arcs; returns
+  error_dynamics._replace(K_arc_hst=...).
+  Maps to "fulltraj_lqr" in
+  GainParameterizers() (dynamics.py).
+end note
+
+GainParameterization <|-- LQRArcGains
+GainParameterization <|-- LQRFullTrajGains
+
+note bottom of GainParameterization
+  compute_gains() returns error_dynamics
+  with its K_arc_hst field populated
+  (error_dynamics._replace(K_arc_hst=...))
+  rather than returning K_arc_hst separately
+  - see 01_data_structures.puml.
+
+  DirectGains (K_arc_hst entries themselves
+  as optimization variables) is not part of
+  the current codebase and has been dropped
+  from this set - can be reintroduced later
+  as a third subclass with the same signature
+  if needed.
+end note
+
+@enduml

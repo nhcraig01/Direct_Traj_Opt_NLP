@@ -1,0 +1,110 @@
+@startuml 06_deterministic_top_composition
+
+title DeterministicTOP - Composition (simplest concrete case)
+
+abstract class TrajectoryOptimizationProblem {
+  -propagator : Propagator
+  -constraints_list : List<Constraint>
+  -problem_def : ProblemDefinition
+  +variables() : List<OptimizationVariable>
+  +propagate(inputs) : (TrajectoryState, ErrorDynamics?)
+  +objective(inputs, traj_state, error_state) : float
+  +constraints() : List<Constraint>
+  +evaluate(inputs) : dict
+  +to_pyoptsparse(init_guess) : (Optimization, sens)
+}
+
+class DeterministicTOP {
+  +variables() : List<OptimizationVariable>
+  +objective(inputs, traj_state, error_state) : float
+  +evaluate(inputs) : dict
+}
+
+TrajectoryOptimizationProblem <|-- DeterministicTOP
+
+class StatePropagator {
+  +propagate(inputs, problem_def) : (TrajectoryState, None)
+}
+
+DeterministicTOP "1" o-- "1" StatePropagator : propagator
+
+abstract class Constraint {
+  +name : str
+  +size : int
+  +lower
+  +upper
+  +linearities : Dict<str, array>
+  +evaluate(inputs, traj_state, error_state) : array
+}
+DeterministicTOP "1" o-- "many" Constraint : constraints_list
+
+class TrajectoryState {
+  +X_hst
+  +t_hst
+  +t_node_bound
+}
+
+class OptimizationVariable {
+  +name : str
+  +size : int
+  +lower
+  +upper
+  +value
+}
+
+note right of DeterministicTOP
+  variables(): U_arc_hst, X0, Xf, alpha, beta
+  (bounds from problem_def.boundary_conditions
+  .alpha_min/max/beta_min/max), plus
+  t_node_bound if toggles.adaptive_mesh_type ==
+  "adaptive_fixedtof". No gain_weights - see
+  05_top_overview.puml for the general
+  toggle-driven recipe shared with
+  StochasticTOP (which additionally appends
+  gain_param.variables()).
+end note
+
+note bottom of DeterministicTOP
+  evaluate(inputs):
+  1. traj, _ = self.propagate(inputs)
+     (= propagator.propagate(inputs, problem_def),
+     inherited; StatePropagator returns
+     error_dynamics = None)
+  2. J = self.objective(inputs, traj, None)
+  3. for c in self.constraints(): c.evaluate(inputs, traj, None)
+
+  This is the simplest concrete TOP - no
+  GainParameterization, no
+  FeedbackControlMethod, no ErrorDynamics/
+  ErrorState (compare to
+  09_stochastic_top_composition.puml).
+  Intended as the first end-to-end
+  implementation target and the benchmark
+  against legacy Problem_Type ==
+  "deterministic" results.
+end note
+
+note right of Constraint
+  constraints_list for DeterministicTOP
+  (see 04_constraints.puml):
+    - BoundaryConstraint x2 (initial, final)
+    - MatchPointConstraint
+    - ControlNormConstraint (error_state=None
+      branch only)
+    - AdaptiveMeshConstraint (if
+      toggles.adaptive_mesh_type ==
+      "adaptive_fixedtof")
+    - DetCollisionAvoidanceConstraint (if
+      toggles.det_col_avoid)
+  CovarianceConstraint and
+  StatCollisionAvoidanceConstraint are
+  stochastic-only - never constructed here.
+end note
+
+note right of StatePropagator
+  Pure state propagation - forward/backward
+  to the midpoint via propagate_arc(), no
+  sensitivities. See 03_propagator.puml.
+end note
+
+@enduml

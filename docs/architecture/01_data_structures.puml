@@ -1,0 +1,154 @@
+@startuml 01_data_structures
+
+title Core Data Structures - TrajectoryState, ErrorDynamics, ErrorState, OptimizationVariable
+
+note as N0
+  TrajectoryState, ErrorDynamics, and
+  ErrorState are the "nouns" that flow
+  through evaluate() and must remain JAX
+  PyTrees (they are loop-carry values inside
+  jit/fori_loop). Implemented natively as
+  typing.NamedTuple - JAX treats NamedTuples
+  as pytrees automatically, no extra packages
+  (equinox/flax/chex) needed. They are
+  immutable: updates go through
+  state._replace(field=new_value), which is
+  free at runtime (traced away by jit, same as
+  the existing .at[].set() pattern).
+
+  OptimizationVariable is build-time-only
+  (never enters traced code) - NamedTuple is
+  used here too for consistency, but pytree-
+  ness is not required for it.
+end note
+
+class OptimizationVariable {
+  +name : str
+  +size : int
+  +lower : array
+  +upper : array
+  +value : array  ' initial guess
+}
+
+note right of OptimizationVariable
+  One instance per addVarGroup() call
+  in the current dir_traj_opt.py.
+  TOP.variables() returns a
+  List<OptimizationVariable>; build_problem()
+  / the pyoptsparse adapter turns this list
+  into the actual optprop.addVarGroup(...)
+  calls.
+end note
+
+class TrajectoryState {
+  +X_hst : array          ' (N_arcs, N_subarcs+1, 7)
+  +t_hst : array
+  +t_node_bound : array   ' (N_arcs+1,)
+}
+
+note right of TrajectoryState
+  "Where is the spacecraft" - produced by
+  Propagator.propagate(). IDENTICAL shape for
+  DeterministicTOP and StochasticTOP - no
+  conditional/zero-filled fields needed here
+  anymore, since the sensitivity terms moved
+  to ErrorDynamics below.
+
+  Known redundancy (not addressed now):
+  t_node_bound/t_hst overlap somewhat - worth
+  revisiting once the propagator math itself
+  is reworked.
+end note
+
+class ErrorDynamics {
+  +A_hst : array          ' (N_arcs, N_subarcs, 7, 7)
+  +B_hst : array          ' (N_arcs, N_subarcs, 7, 3)
+  +A_arc_hst : array      ' (N_arcs, 7, 7)
+  +B_arc_hst : array      ' (N_arcs, 7, 3)
+  +H_hst : array          ' (N_arcs, N_subarcs+1, meas_dim, 7)        -- zero for true_state
+  +P_v_hst : array        ' (N_arcs, N_subarcs+1, meas_dim, meas_dim) -- zero for true_state
+  +K_arc_hst : array      ' (N_arcs, 3, 7)  -- zero/unset until gain_param.compute_gains()
+  +G_exe_arc_hst : array  ' (N_arcs, 3, 3)  -- zero/unset until step 4 of evaluate()
+}
+
+note right of ErrorDynamics
+  The linearized perturbation model along the
+  trajectory - neither "where is the
+  spacecraft" (TrajectoryState) nor "what is
+  the resulting error" (ErrorState), but the
+  bridge between them. Stochastic-only.
+
+  Produced by SensitivityPropagator.propagate()
+  (A_hst, B_hst, A_arc_hst, B_arc_hst - zero-
+  filled H_hst/P_v_hst/K_arc_hst/G_exe_arc_hst),
+  then progressively filled in:
+    - controller.augment_error_dynamics()
+      populates H_hst/P_v_hst (EstimatedState-
+      Feedback only; no-op for TrueStateFeedback)
+    - gain_param.compute_gains() populates
+      K_arc_hst
+    - a free function (gates2Gexe_vmap) populates
+      G_exe_arc_hst from inputs['U_arc_hst']
+  Each step is a cheap _replace() under jit.
+  By the time controller.propagate_cov() is
+  called, error_dynamics is fully populated.
+
+  G_stoch (constant process-noise covariance)
+  is NOT stored here - it's a constant from
+  problem_def, read directly by propagate_cov().
+  Only input-dependent, per-evaluate() quantities
+  live in ErrorDynamics.
+
+  Known redundancy (not addressed now):
+  A_arc_hst/B_arc_hst are in principle
+  recoverable from A_hst/B_hst (full-arc
+  sensitivities from sub-arc sensitivities) -
+  worth revisiting once the propagator math
+  itself is reworked.
+end note
+
+class ErrorState {
+  +P_hst : array          ' (N_arcs, N_subarcs+1, 7, 7) -- "true" deviation covariance
+  +P_U_arc_hst : array    ' (N_arcs, 3, 3)
+}
+
+note right of ErrorState
+  Single concrete shape, returned identically
+  by every FeedbackControlMethod - no
+  subclassing needed.
+
+  TrueStateFeedback.propagate_cov() produces
+  P_hst directly (as today).
+
+  EstimatedStateFeedback.propagate_cov()
+  internally propagates the augmented 14x14
+  Paug_hst (Phat/Ptild/cross-correlation
+  blocks) through its EKF loop as a LOCAL
+  variable that never leaves the method; at
+  the end it derives, per node:
+    P_hst = Phat - Phattild - Phattild.T + Ptild
+  and returns ErrorState(P_hst, P_U_arc_hst) -
+  the augmented representation is fully
+  private to EstimatedStateFeedback.
+
+  Renamed from "CovState" since this may later
+  carry Cholesky factors or higher-order error
+  terms instead of raw covariances - "Error"
+  is the stable concept, "Cov" is just today's
+  representation. Square-root propagation is a
+  separate future effort, intentionally not
+  modeled here yet.
+
+  Because ErrorState is standardized, the
+  constraints/objective terms that consume it
+  (ControlNormConstraint, CovarianceConstraint,
+  the J_stat objective term) are now plain
+  functions of (inputs, traj_state, error_state,
+  problem_def) - they do NOT need a reference
+  back to the controller that produced it. See
+  09_stochastic_top_composition.puml.
+end note
+
+note "K_arc_hst and G_exe_arc_hst now live as\nfields of ErrorDynamics (see above) rather than\nas transient locals - GainParameterization\n.compute_gains() and gates2Gexe_vmap()\npopulate them via _replace() before\nerror_dynamics is passed to propagate_cov()." as N1
+
+@enduml

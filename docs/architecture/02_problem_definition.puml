@@ -1,0 +1,187 @@
+@startuml 02_problem_definition
+
+title Problem Definition and build_problem() Factory
+
+class ProblemDefinition {
+  +name : str
+  +Sys : dict
+  +dims : Dimensions
+  +integration : Integration
+  +spacecraft : Spacecraft
+  +boundary_conditions : BoundaryConditions
+  +uncertainty : Uncertainty
+  +measurement : Measurement
+  +collision_avoidance : CollisionAvoidance
+  +toggles : Toggles
+}
+
+class Dimensions {
+  +state_dim : int = 7
+  +control_dim : int = 3
+  +meas_dim : int
+  +N_arcs : int
+  +N_subarcs : int
+  +N_nodes : int
+  +N_trials : int
+  +N_save : int
+  +arc_length_opt : int
+  +arc_length_det : int
+  +transfer_length_det : int
+  +post_insert_length : int
+  +length : int
+}
+
+class Integration {
+  +a_tol : float
+  +r_tol : float
+}
+
+class Spacecraft {
+  +m0 : float
+  +Isp : float
+  +T_max : float
+  +U_Acc_min_nd : float
+  +ve : float
+}
+
+class BoundaryConditions {
+  +X0_init : array
+  +Xf_init : array
+  +Orb0_X_hst : array
+  +Orb0_t_hst : array
+  +Orbf_X_hst : array
+  +Orbf_t_hst : array
+  +X0_interp : CubicInterpolation
+  +Xf_interp : CubicInterpolation
+  +alpha_min : float
+  +alpha_max : float
+  +beta_min : float
+  +beta_max : float
+  +t_node_bound : array
+  +tf_T : float
+  +indx_f : array
+  +indx_b : array
+}
+
+class Uncertainty {
+  +Phat_0 : array
+  +Ptild_0 : array
+  +P_XT_targ : array
+  +P_XT_targ_inv : array
+  +S_XT_targ : array
+  +S_XT_targ_inv : array
+  +G_stoch : array
+  +gates : array
+  +mx_tcm_bound : float
+  +mx_dV_bound : float
+}
+
+class Measurement {
+  +r_obs : array
+  +pos_sig : float
+  +range_sig : float
+  +rate_sig : float
+  +angles_sig : float
+}
+
+class CollisionAvoidance {
+  +r_obj : array
+  +d_safe : float
+  +mx_col_bound : float
+  +alpha_UT : float
+  +beta_UT : float
+  +kappa_UT : float
+}
+
+class Toggles {
+  +problem_type : str
+  +feedback_control_type : str
+  +measurements : tuple
+  +gain_param_type : str
+  +adaptive_mesh_type : str
+  +alpha_rng : (float, float)
+  +beta_rng : (float, float)
+  +det_col_avoid : bool
+  +stat_col_avoid : bool
+}
+
+ProblemDefinition *-- Dimensions
+ProblemDefinition *-- Integration
+ProblemDefinition *-- Spacecraft
+ProblemDefinition *-- BoundaryConditions
+ProblemDefinition *-- Uncertainty
+ProblemDefinition *-- Measurement
+ProblemDefinition *-- CollisionAvoidance
+ProblemDefinition *-- Toggles
+
+note right of ProblemDefinition
+  Replaces today's split of cfg_args /
+  dyn_args / Sys / Boundary_Conds. All
+  fields are frozen dataclasses - pure
+  config/constants, no model objects or
+  prepared callables live here.
+
+  Built ONCE, up front, by build_problem_def().
+  Stored as a private attribute on
+  Propagator, GainParameterization,
+  FeedbackControlMethod, and Constraint
+  subclasses at construction time. Never
+  passed through evaluate(inputs) - inputs
+  (the optimization variables dict) is the
+  only thing traced through jit/jacfwd.
+
+  Today's "models" dict (dynamics + measurement
+  models) is NOT part of ProblemDefinition -
+  each piece now lives where it's used:
+    - dynamics model -> EquationsOfMotion,
+      composed by Propagator (03_propagator.puml)
+    - measurement model -> -measurement_model :
+      MeasurementModel on EstimatedStateFeedback
+      (08_feedback_control_method.puml)
+  Both are constructed from problem_def.Sys /
+  problem_def.measurement during
+  build_problem(), but problem_def itself stays
+  pure data.
+
+  Toggles.alpha_rng/beta_rng directly set
+  boundary_conditions.alpha_min/max/beta_min/max
+  in build_problem_def() - a "fixed" phasing is
+  just alpha_rng = (a, a) (see
+  04_constraints.puml / BoundaryConstraint).
+end note
+
+class "build_problem(config, toggles)" as build_problem << function >>
+
+note bottom of build_problem
+  High-level factory - the single entry
+  point that assembles everything:
+
+  1. problem_def = build_problem_def(config, toggles)
+  2. eom = CR3BPDynamics(problem_def)
+       (future: other EquationsOfMotion subclasses)
+  3. propagator  = StatePropagator(eom, problem_def) or
+                    SensitivityPropagator(eom, problem_def)
+  4. gain_param  = LQRArcGains(...) / LQRFullTrajGains(...)
+                    (StochasticTOP only)
+  5. controller  = TrueStateFeedback(...) /
+                    EstimatedStateFeedback(measurement_model, problem_def)
+                    (StochasticTOP only)
+  6. constraints_list = [...] - one instance per active
+       toggle, each injected with the problem_def slices
+       and/or propagator references it needs
+       (see 04_constraints.puml)
+  7. top = DeterministicTOP(propagator, constraints_list, problem_def)
+        or StochasticTOP(propagator, gain_param, controller,
+                          constraints_list, problem_def)
+  8. init_guess = make_InitGuess(...)
+  9. return top, init_guess
+
+  Returns (top, init_guess). Caller then
+  does: optprob, sens = top.to_pyoptsparse(init_guess)
+  (see 10_optimization_adapter.puml).
+end note
+
+build_problem ..> ProblemDefinition : creates
+build_problem ..> "TrajectoryOptimizationProblem" : creates & returns
+
+@enduml

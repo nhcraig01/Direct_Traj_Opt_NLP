@@ -1,0 +1,75 @@
+@startuml 05_top_overview
+
+title Trajectory Optimization Problem - Top-Level Hierarchy
+
+abstract class TrajectoryOptimizationProblem {
+  -propagator : Propagator
+  -constraints_list : List<Constraint>
+  -problem_def : ProblemDefinition
+  +variables() : List<OptimizationVariable>
+  +propagate(inputs) : (TrajectoryState, ErrorDynamics?)
+  +objective(inputs, traj_state, error_state) : float
+  +constraints() : List<Constraint>
+  +evaluate(inputs) : dict
+  +to_pyoptsparse(init_guess) : (Optimization, sens)
+}
+
+class DeterministicTOP {
+  +variables() : List<OptimizationVariable>
+  +objective(inputs, traj_state, error_state) : float
+  +evaluate(inputs) : dict
+}
+
+class StochasticTOP {
+  -gain_param : GainParameterization
+  -controller : FeedbackControlMethod
+  +variables() : List<OptimizationVariable>
+  +objective(inputs, traj_state, error_state) : float
+  +evaluate(inputs) : dict
+}
+
+TrajectoryOptimizationProblem <|-- DeterministicTOP
+TrajectoryOptimizationProblem <|-- StochasticTOP
+
+note right of TrajectoryOptimizationProblem
+  propagate(), constraints(), and
+  to_pyoptsparse() are CONCRETE here -
+  identical for both subclasses:
+    propagate(inputs) = self.propagator.propagate(inputs, self.problem_def)
+    constraints()     = self.constraints_list
+    to_pyoptsparse()  = see 10_optimization_adapter.puml
+
+  variables(), objective(), and evaluate()
+  are abstract - overridden by each
+  subclass. error_state is always None for
+  DeterministicTOP; its objective()/evaluate()
+  simply ignore it.
+
+  variables() is a flat, toggle-driven list
+  built from problem_def (core trajectory
+  variables U_arc_hst/X0/Xf, alpha/beta with
+  bounds from problem_def.boundary_conditions
+  .alpha_min/max/beta_min/max - themselves set
+  via toggles.alpha_rng/beta_rng, see
+  02_problem_definition.puml - plus
+  t_node_bound if adaptive_mesh, etc.) -
+  mirrors today's dir_traj_opt.py
+  addVarGroup() sequence. StochasticTOP
+  additionally appends
+  self.gain_param.variables(). Constraint
+  subclasses do NOT contribute variables
+  (see 04_constraints.puml) - this keeps a
+  single, traceable place where every
+  optimization variable is introduced.
+end note
+
+note right of StochasticTOP
+  Composes a GainParameterization and a
+  FeedbackControlMethod as independent
+  strategy objects, in addition to the
+  propagator / constraints_list / problem_def
+  inherited from the base class. Detailed in
+  09_stochastic_top_composition.puml.
+end note
+
+@enduml
