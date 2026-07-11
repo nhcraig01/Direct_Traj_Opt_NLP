@@ -1,0 +1,180 @@
+@startuml 11_module_layout
+
+title Module / Package Layout (src/) - NEW diagram
+
+note as N0
+  No earlier diagram documented the actual physical file
+  organization - only class relationships. As of this diagram,
+  src/ is a flat top-level package (collapsed from the earlier
+  traj_opt_oop_rework/src/ wrapper) split into 6 subpackages by
+  concern. Package-level __init__.py at src/ sets
+  jax.config.update("jax_enable_x64", True) as a side effect of
+  import - required for correctness (not just precision) at
+  production integration tolerances.
+end note
+
+package "src.problem" {
+  [problem_definition.py] as problem_def
+  note right of problem_def
+    ProblemDefinition, Toggles, Dimensions,
+    BoundaryConditions, Uncertainty, Measurement,
+    CollisionAvoidance dataclasses +
+    build_problem_def(config, toggles)
+  end note
+  [data_structures.py] as data_struct
+  note right of data_struct
+    OptimizationVariable (build-time only,
+    the one non-sol_data-dict typed structure)
+  end note
+  [case_manifest.py] as case_manifest
+  note right of case_manifest
+    write_case_yaml / load_case_spec -
+    Results/<scenario>/<case>/case.yaml,
+    the scenario + Toggles seed a solved
+    case is reconstructed from
+  end note
+}
+
+package "src.dynamics" {
+  [equations_of_motion.py] as eom
+  note right of eom
+    EquationsOfMotion base, CR3BPDynamics
+    (own lambdified symbolic EOM - no
+    external Lib dependency)
+  end note
+  [propagator.py] as propagator
+  note right of propagator
+    Propagator base (_propagate_arc via
+    diffrax), StatePropagator (DeterministicTOP),
+    StateSensitivityPropagator (StochasticTOP,
+    A_hst/B_hst via jax.jacfwd)
+  end note
+}
+
+package "src.stochastic" {
+  [error_propagator.py] as error_prop
+  note right of error_prop
+    ErrorPropagator hierarchy - see
+    08_feedback_control_method.puml
+  end note
+  [measurement_model.py] as meas_model
+  note right of meas_model
+    MeasurementModel.build(problem_def) -
+    SymPy range/range-rate/angles
+    construction, internalized (no Lib dep)
+  end note
+  [gain_parameterization.py] as gain_param
+  note right of gain_param
+    GainParameterization hierarchy
+    (LQRArcGains, LQRFullTrajGains)
+  end note
+  [mc_runner.py] as mc_runner
+  note right of mc_runner
+    MonteCarloRunner base (build_single_trial()
+    -> pure fn, vmap+chunk batching) +
+    TrueStateMCRunner / EstimatedStateMCRunner.
+    No earlier diagram covered this hierarchy.
+  end note
+  [control_noise.py] as control_noise
+  note right of control_noise
+    gates2Gexe, MC_U_tcm_k, MC_U_exe -
+    shared by error_propagator + mc_runner
+  end note
+}
+
+package "src.optimization" {
+  [trajectory_optimization_problem.py] as top
+  note right of top
+    TrajectoryOptimizationProblem base,
+    DeterministicTOP, StochasticTOP - see
+    09_stochastic_top_composition.puml
+  end note
+  [constraints.py] as constraints
+  note right of constraints
+    Constraint hierarchy (Boundary,
+    MatchPoint, ControlNorm, Covariance,
+    Mesh, DetCollisionAvoidance).
+    StatCollisionAvoidance does NOT exist -
+    see README.md's Notes section.
+  end note
+  [init_guess.py] as init_guess
+  note right of init_guess
+    random_init_guess / hot_start_init_guess
+  end note
+}
+
+package "src.postprocess" {
+  [detailed_trajectory.py] as detailed_traj
+  note right of detailed_traj
+    generate_detailed_data(problem_def, top,
+    xStar) - function-based (not class-based,
+    unlike the rest of src/), the OOP rewrite
+    of legacy sim_Det_traj. No earlier diagram
+    covered this.
+  end note
+  [plotting.py] as plotting
+  note right of plotting
+    plot_case(case_dir) - matplotlib
+    quick-look figures from a case's data.h5
+  end note
+}
+
+package "src.utils" {
+  [math_utils.py] as math_utils
+  note right of math_utils
+    Generic numeric helpers (mat_lmax,
+    cart2sph, sig2cov, col_avoid, ...)
+  end note
+  [io.py] as io
+  note right of io
+    ALL file I/O + the HDF5 schema:
+    yaml_load/save, load_family, process_sparsity,
+    save_solution/load_solution (sol.h5),
+    save_results/load_results (grouped data.h5:
+    /meta /orbits /det /mc). No earlier diagram
+    covered this.
+  end note
+}
+
+problem_def ..> math_utils
+problem_def ..> io
+eom ..> problem_def
+propagator ..> eom
+propagator ..> problem_def
+error_prop ..> control_noise
+error_prop ..> math_utils
+error_prop ..> meas_model
+error_prop ..> problem_def
+gain_param ..> data_struct
+gain_param ..> problem_def
+mc_runner ..> control_noise
+mc_runner ..> math_utils
+mc_runner ..> error_prop
+mc_runner ..> propagator
+mc_runner ..> problem_def
+top ..> constraints
+top ..> eom
+top ..> propagator
+top ..> error_prop
+top ..> gain_param
+top ..> data_struct
+top ..> io
+constraints ..> math_utils
+constraints ..> error_prop
+constraints ..> problem_def
+init_guess ..> data_struct
+detailed_traj ..> control_noise
+detailed_traj ..> math_utils
+detailed_traj ..> error_prop
+plotting ..> io
+
+note as N1
+  Repo-root entry scripts (outside src/), each a standalone
+  config-at-top script with no CLI flags:
+    dir_traj_opt.py   - solve (writes sol.h5 + case.yaml)
+    generate_data.py  - rebuild problem from case.yaml, replay +
+                         Monte Carlo (writes data.h5 + Sys.mat)
+    plot_traj.py       - matplotlib quick-look from data.h5
+end note
+
+@enduml

@@ -1,0 +1,86 @@
+---
+# Reference/template scenario - every field is explained inline below. The
+# other Scenarios/*.yaml files use this same schema without comments; use
+# this file as the field-by-field reference when writing a new scenario.
+
+name: "L1 Lyapunov Orbit to L2 NRHO w/ Flybys"
+description: "IDK whaever... this is just random testing, go see the other scenarios for real stuff"
+
+dynamics: # Dynamics model + where its system constants come from
+  type: "CR3BP"                                    # Only CR3BP is implemented
+  sys_param_file: 'data/EarthMoon_System/EMSys.yaml'  # mu, length/time/velocity/accel scales (Ls/Ts/Vs/As), primary body radii/positions
+
+integration: # diffrax adaptive step-controller tolerances (Dopri8 solver)
+  a_tol: 1.e-12   # absolute tolerance
+  r_tol: 1.e-12   # relative tolerance
+
+traj_parameters:
+  control_arcs: 40        # N_arcs - number of shooting/control arcs the transfer is divided into
+  sub_arcs: 1              # N_subarcs - covariance-propagation sub-steps per arc (estimated_state EKF measurement-update cadence)
+  save_pts_detailed: 21    # N_save - detailed-resolution points saved per sub-arc when generate_data.py replays the solution
+  MC_trials: 1000          # N_trials - number of Monte Carlo trials generate_data.py runs for stochastic cases
+
+boundary_conditions:
+  t0: "2026-01-01T00:00:00"   # Initial epoch (ISO 8601) - used only to compute elapsed transfer time, not absolute ephemeris
+  tf: "2026-01-21T00:00:00"   # Final epoch - (tf - t0) sets the total nondimensional transfer time
+  tf_T: 0.5                    # Post-insertion "safety coast" duration, in days, propagated with zero control past the final node
+  initial_orbit:                       # Departure orbit, pulled from a precomputed periodic-orbit family file
+    family_path: 'data/EarthMoon_System/L1_Lyap.h5'  # HDF5 family file (X_hst/t_hst/JCs/STMs/BrkVals) - see data/EarthMoon_System/
+    Orb_ID: 100                                       # Index into the family selecting a specific periodic orbit
+    Start_Idx: 0                                       # Index into that orbit's saved states selecting the phasing start point
+  final_orbit:                          # Arrival orbit - same schema as initial_orbit
+    family_path: 'data/EarthMoon_System/L2_S_Halo.h5'
+    Orb_ID: 300
+    Start_Idx: 0
+
+engine: # Spacecraft mass/thrust properties (nondimensionalized internally)
+  m0: 200      # Initial spacecraft mass [kg]
+  Isp: 3337    # Specific impulse [s]
+  T_max: .5    # Maximum thrust [N]
+
+uncertainty:
+  covariance:
+    initial_dispersion: # Phat_0 - true-state dispersion covariance at t0 (1-sigma values)
+      pos_sig: 10        # Position 1-sigma [km]
+      vel_sig: .001       # Velocity 1-sigma [km/s]
+      mass_sig: 1.e-12    # Mass 1-sigma [kg] (~0: mass isn't actually dispersed)
+    initial_error: # Ptild_0 - estimation-error covariance at t0 (estimated_state feedback only), same units as above
+      pos_sig: .01
+      vel_sig: .001
+      mass_sig: 1.e-12
+    post_insert_target_total: # P_XT_targ - target true-state deviation covariance at the end of the post-insertion coast (what the optimizer is constrained to achieve)
+      pos_sig: 50
+      vel_sig: .01
+      mass_sig: 60
+  acc_sig: 5.e-12   # 1-sigma stochastic dynamics/process-noise acceleration [km/s^2] - builds the process-noise covariance G_stoch added every arc
+  measurement: # Ground-station measurement model (estimated_state feedback only)
+    observer_body: 'r1'                    # Which primary the observer sits on: 'r1' = Earth, 'r2' = Moon
+    observer_alt_lat_lon: [6371., 0., 0.]  # Observer position as [altitude km, latitude deg, longitude deg] above that body
+    pos_sig: 1.          # Position-measurement 1-sigma [km] (used only if "position" is in the active Measurements set)
+    range_sig: 3.e-3      # Range-measurement 1-sigma [km]
+    range_rate_sig: 2.e-5 # Range-rate-measurement 1-sigma [km/s]
+    angles_sig: 20        # Az/el angle-measurement 1-sigma [arcsec]
+  gates: # Control execution-error ("gates") model: each axis's error variance is fixed + (proportional-to-|U|) squared terms
+    fixed_mag: 1.e-3     # Fixed (magnitude-independent) thrust-magnitude error std dev [ND]
+    prop_mag: 1.e-3       # Thrust-magnitude error std dev proportional to |U| [ND, dimensionless fraction]
+    fixed_point: 1.e-3    # Fixed thrust-pointing error std dev [ND]
+    prop_point: 1.e-3     # Thrust-pointing error std dev proportional to |U| [ND]
+  tcm_stat_bound: .999   # Probability level -> chi2(3 dof) sigma multiplier used to scale the stochastic TCM-magnitude term added to the objective
+  dV_bound: .99           # Probability level -> chi2(3 dof) sigma multiplier used for the reported statistical dV bound (Det_dV_bound)
+
+constraints: # Collision-avoidance constraint against a body (default: the secondary, Moon)
+  col_avoid:
+    parameters:
+      obj_body: 'r2'   # Which body to avoid: 'r1' = Earth, 'r2' = Moon
+      safe_d: 3000      # Keep-out radius around that body [km]
+    det:
+      bool: True   # Enable DETERMINISTIC collision avoidance (keep the nominal trajectory outside safe_d)
+    stat:
+      bool: False   # Enable STATISTICAL collision avoidance under uncertainty (unscented-transform sigma-point margin).
+                     # NOTE: not currently implemented in src/ - leave this False; setting it True silently
+                     # disables ALL collision avoidance (neither the det nor stat constraint gets added).
+      bound: .999               # Probability level for the statistical margin (unused while stat.bool is unimplemented)
+      UT:                        # Unscented-transform sigma-point parameters (unused while stat.bool is unimplemented)
+        alpha: 1.0
+        beta: 2.0
+        kappa: 4.0

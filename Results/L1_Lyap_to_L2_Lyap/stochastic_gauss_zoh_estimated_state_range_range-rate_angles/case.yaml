@@ -1,0 +1,15 @@
+scenario: L1_Lyap_to_L2_Lyap
+problem_type: stochastic_gauss_zoh
+feedback_control_type: estimated_state
+measurements:
+- range
+- range-rate
+- angles
+gain_param_type: fulltraj_lqr
+adaptive_mesh_type: fixed
+alpha_rng:
+- 0.0
+- 0.0
+beta_rng:
+- 0.0
+- 0.0

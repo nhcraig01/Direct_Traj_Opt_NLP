@@ -1,0 +1,29 @@
+[project]
+name = "direct-traj-opt-nlp"
+version = "1.0.0"
+description = "Direct trajectory optimization in the CR3BP with deterministic and stochastic (true-state / true-state-sqrt / estimated-state EKF) feedback, via SNOPT/pyoptsparse."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+    "jax>=0.7",
+    "diffrax>=0.7",
+    "numpy>=2.0",
+    "scipy>=1.14",
+    "h5py>=3.10",
+    "pyyaml>=6.0",
+    "astropy>=6.0",
+    "sympy>=1.12",
+    "matplotlib>=3.9",
+    "tqdm>=4.65",
+]
+
+# pyoptsparse is intentionally NOT listed here. `pip install pyoptsparse` from
+# PyPI builds without SNOPT bindings - it "succeeds" while leaving the solver
+# non-functional. SNOPT is separately licensed and pyoptsparse has to be built
+# against it locally; see README.md's "SNOPT / pyoptsparse" section for that
+# step. Everything else in this list is enough to explore/read the codebase
+# and run its (non-pytest) sanity checks without a solver.
+
+[tool.setuptools.packages.find]
+include = ["src*"]

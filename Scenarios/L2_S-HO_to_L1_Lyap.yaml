@@ -1,0 +1,80 @@
+---
+name: "L2 S-Halo to L1 Lyap Transfer w Moon Flybys"
+description: "This trajectory is meant to stress the statistical effects when traversing from the lunar region to the earth, and back."
+dynamics:
+  type: "CR3BP"
+  sys_param_file: 'data/EarthMoon_System/EMSys.yaml'
+integration:
+  a_tol: 1.e-12
+  r_tol: 1.e-12
+traj_parameters:
+  control_arcs: 40
+  sub_arcs: 1
+  save_pts_detailed: 11
+  MC_trials: 1000
+boundary_conditions:
+  t0: "2026-01-01T00:00:00"
+  tf: "2026-02-10T00:00:00"
+  tf_T: 0.5
+  initial_orbit:
+    family_path: 'data/EarthMoon_System/L2_S_Halo.h5'
+    Orb_ID: 100
+    Start_Idx: 0
+  final_orbit:
+    family_path: 'data/EarthMoon_System/L1_Lyap.h5'
+    Orb_ID: 150
+    Start_Idx: 0
+  type: "free"
+  alpha:
+    min: .0
+    max: 1.0
+  beta:
+    min: .0
+    max: 1.0
+engine:
+  m0: 200
+  Isp: 3337
+  T_max: .5
+uncertainty:
+  covariance:
+    initial_dispersion:
+      pos_sig: 10
+      vel_sig: .001
+      mass_sig: 1.e-12
+    initial_error:
+      pos_sig: .01
+      vel_sig: .001
+      mass_sig: 1.e-12
+    post_insert_target_total:
+      pos_sig: 50
+      vel_sig: .01
+      mass_sig: 60
+  acc_sig: 5.e-12
+  measurement:
+    observer_body: 'r1'
+    observer_alt_lat_lon: [6371., 0., 0.]
+    pos_sig: 1.
+    range_sig: 3.e-3
+    range_rate_sig: 2.e-5
+    angles_sig: 20
+  gates:
+    fixed_mag: 1.e-3
+    prop_mag: 1.e-3
+    fixed_point: 1.e-3
+    prop_point: 1.e-3
+  tcm_stat_bound: .999
+  dV_bound: .99
+constraints: 
+  col_avoid:
+    parameters:
+      obj_body: 'r2'
+      safe_d: 2000
+    det:
+      bool: True
+    stat:
+      bool: False
+      bound: .999
+      UT:
+        alpha: 1.0
+        beta: 2.0
+        kappa: 4.0

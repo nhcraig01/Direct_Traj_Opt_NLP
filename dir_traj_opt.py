@@ -1,178 +1,157 @@
-# Direct Trajectory Optimization
+# Direct Trajectory Optimization - solve entry point.
+#
+# Builds a ProblemDefinition + TrajectoryOptimizationProblem from a scenario
+# yaml, runs SNOPT, and writes the optimizer solution (sol.h5) plus its case
+# manifest (case.yaml) into Results/<scenario>/<case>/. That's the whole job:
+# the detailed-trajectory + Monte Carlo DATA generation is a separate step
+# (generate_data.py, which rebuilds the exact problem from case.yaml), and
+# plotting is plot_traj.py. Set Generate_Data = True below to chain the data
+# step right after solving.
+
+import os
+import sys
+import time
+
+# Ensure the repo root (this script's directory) is on sys.path and is the cwd
+# so scenario yamls resolve their data/... paths and Results/... outputs land
+# correctly regardless of how this is launched (terminal, IDE run button,
+# interactive window).
+_REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+os.chdir(_REPO_ROOT)
+
 import jax
-import jax.numpy as jnp
 jax.config.update('jax_enable_x64', True)
 jax.config.update('jax_platform_name', 'cpu')
 
 from pyoptsparse.pySNOPT.pySNOPT import SNOPT
-from pyoptsparse import Optimization
 
-import time
-
-from dataclasses import replace
-
-# Utilities
-from Lib.utilities import yaml_load, process_config, process_sparsity, prepare_prop_funcs, prepare_opt_funcs, prepare_sol, save_sol, save_OptimizerSol, load_OptimizerSol, make_InitGuess
-
-# Math
-from Lib.math import adaptive_mesh_con_terms
-
-# Dynamics
-from Lib.dynamics import eoms_gen, propagator_gen
+from src.utils.io import yaml_load, save_solution
+from src.problem.case_manifest import write_case_yaml
+from src.optimization.init_guess import hot_start_init_guess, random_init_guess
+from src.problem.problem_definition import Toggles, build_problem_def
+from src.optimization.trajectory_optimization_problem import DeterministicTOP, StochasticTOP
 
 
 if __name__ == "__main__":
 
-    # Configuration Files and Problem Type --------------------------------------
-    # Scenario Folder Names:
-    #   L2_S-NRHO_to_L2_N-NRHO
-    #   L1_N-HO_to_L2_N-HO
-    #   L1_Lyap_to_L2_Lyap
-    #   L2_S-HO_to_L1_Lyap
-    #   L2_S-HO_to_L4_N-Axial
-    #   Sandbox
-    folder_name = "Sandbox"
+    # Case selection ------------------------------------------------------------
+    # Scenarios (Scenarios/<scenario>.yaml):
+    #   L2_S-NRHO_to_L2_N-NRHO / L1_N-HO_to_L2_N-HO / L1_Lyap_to_L2_Lyap
+    #   L2_S-HO_to_L1_Lyap / L2_S-HO_to_L4_N-Axial / Sandbox
+    scenario = "L1_N-HO_to_L2_N-HO"
 
-    # Problem Types:
-    #   deterministic
-    #   stochastic_gauss_zoh
-    Problem_Type = "deterministic"
+    # Problem Types:  deterministic | stochastic_gauss_zoh
+    Problem_Type = "stochastic_gauss_zoh"
 
-    # Adaptive Mesh:
-    #   fixed
-    #   adaptive_fixedtof
+    # Adaptive Mesh:  fixed | adaptive_fixedtof
     Adaptive_Mesh_Type = "fixed"
 
-    # Gain Parameterization Types:
-    #   arc_lqr
-    #   fulltraj_lqr
+    # Gain Parameterization (stochastic only):  arc_lqr | fulltraj_lqr
     Gain_Parametrization_Type = "fulltraj_lqr"
 
-    # Feedback Controller Types:
-    #   true_state
-    #   estimated_state
-    Feedback_Control_Type = "true_state" 
+    # Feedback Controller Types (stochastic only):
+    #   true_state        - raw covariance propagation (TrueStateCovPropagator)
+    #   true_state_sqrt   - square-root covariance propagation (TrueStateSqrtCovPropagator)
+    #   estimated_state   - EKF-augmented covariance (EstimatedStateCovPropagator)
+    Feedback_Control_Type = "true_state"
 
-    # Measurement Types (only applies for estimated state feedback): 
-    #   position
-    #   range
-    #   range-rate
-    #   angles
-    Measurements = ("range","range-rate","angles")
+    # Measurement Types (estimated_state only):  range | range-rate | angles
+    Measurements = ("range", "range-rate", "angles")
 
-    # Hot Start Solutions:
-    #   None
-    #   deterministic
-    #   stochastic_gauss_zoh_true_state
-    #   stochastic_gauss_zoh_estimated_state_{measurements}
-    Hot_Start_Sol = None
+    # alpha/beta phasing variable ranges - (a, a) pins alpha to a (fixed
+    # phasing); widen e.g. to (0.0, 1.0) to let the optimizer pick a phase along
+    # the whole orbit. Collision avoidance is toggled via the scenario yaml's
+    # constraints.col_avoid block, not here.
+    Alpha_Rng = (0.0, 0.0)
+    Beta_Rng = (0.0, 0.0)
 
-    # Node Resampling (only applies if hot start solution is not None):
-    #   None
-    #   burns
-    #   ends_burns
-    Node_Resampling = None
+    # Hot Start: a CASE name to warm-start from (reads Results/<scenario>/<case>/
+    # sol.h5), or None. Variable shapes must match this run's exactly (node
+    # resampling isn't ported).
+    Hot_Start_Case = "stochastic_gauss_zoh_true_state"
+
+    SEED = 7
+
+    # Chain generate_data.py after solving to also produce data.h5 for plotting.
+    Generate_Data = False
     # ---------------------------------------------------------------------------
 
-    # Directory and File Names --------------------------------------------------
-    file_name = Problem_Type
-    if Problem_Type.lower() == 'stochastic_gauss_zoh':          
-        file_name += "_" + Feedback_Control_Type
+    # Case directory + files (Results/<scenario>/<case>/) -----------------------
+    case = Problem_Type
+    if Problem_Type.lower() == 'stochastic_gauss_zoh':
+        case += "_" + Feedback_Control_Type
         if Feedback_Control_Type.lower() == 'estimated_state':
-            file_name += "_" + "_".join(Measurements)
+            case += "_" + "_".join(Measurements)
 
-    config_file = r"Scenarios/"+folder_name+"/config.yaml"
-
-    hot_start_file = r"Scenarios/"+folder_name+"/"+Hot_Start_Sol+"_sol.h5" if Hot_Start_Sol else None
-    save_file = r"Plotting/Scenarios/"+folder_name+"/"+file_name+"/"
-
-    OptimSol_save_file = r"Scenarios/"+folder_name+"/"+file_name+"_sol.h5"
+    config_file = f"Scenarios/{scenario}.yaml"
+    hot_start_file = f"Results/{scenario}/{Hot_Start_Case}/sol.h5" if Hot_Start_Case else None
+    case_dir = f"Results/{scenario}/{case}/"
     # ---------------------------------------------------------------------------
 
     # SNOPT Options -------------------------------------------------------------
-    optOptions = {'Major optimality tolerance': 1e-5,   # Keep here
-                  'Major feasibility tolerance': 1e-6,  # Keep here - Changes how tightly the constraints are met
-                  'Minor feasibility tolerance': 1e-6,  # Similar to above but for the QP sub-problem
-                  'Major iterations limit': 1000,
-                  'Partial prince': 1,                  # Keep here - Impacts the number of variales to examine in the gradient search (larger is fewer)
-                  'Linesearch tolerance': .99,          # Keep here - Sets the level of accuracy to find in the quadratic sub problem
-                  'Function precision': 1e-10,          # Keep a few (2 to 3) orders of magnitude above the integration tolerances to keep SNOPT from seeing noise
-                  'Verify level': -1,                   # Used to verify gradients (-1 for don't verify)
+    optOptions = {'Major optimality tolerance': 1e-5,
+                  'Major feasibility tolerance': 1e-6,
+                  'Minor feasibility tolerance': 1e-6,
+                  'Major iterations limit': 10000,
+                  'Partial prince': 1,
+                  'Linesearch tolerance': .99,
+                  'Function precision': 1e-10,
+                  'Verify level': -1,
                   'Nonderivative linesearch': 0,
-                  'Major step limit': 1e0 if hot_start_file is None else 1e-3,  # (Lower to keep near guess) Limits the step size of the optimization variables (can help with convergence in some cases)
+                  'Major step limit': 1e0 if hot_start_file is None else 1e-3,
                   'Elastic weight': 1.e4}
     # ---------------------------------------------------------------------------
 
-    
-    # Process Configuration - System Constants, optimization arguments, boundary conditions, dynamical eoms, and optimization type
+    # Build the problem ---------------------------------------------------------
     config = yaml_load(config_file)
-    Sys, models, Boundary_Conds, cfg_args, dyn_args = process_config(config, Problem_Type, Feedback_Control_Type, Gain_Parametrization_Type, Adaptive_Mesh_Type, Measurements)
+    toggles = Toggles(
+        problem_type=Problem_Type,
+        feedback_control_type=Feedback_Control_Type,
+        measurements=Measurements,
+        gain_param_type=Gain_Parametrization_Type,
+        adaptive_mesh_type=Adaptive_Mesh_Type,
+        alpha_rng=Alpha_Rng,
+        beta_rng=Beta_Rng,
+    )
+    problem_def = build_problem_def(config, toggles)
 
-    # Propagation functions
-    eom_e, propagators, iterators = prepare_prop_funcs(eoms_gen, models, propagator_gen, dyn_args, replace(cfg_args, N_save=2))
+    if Problem_Type.lower() == "deterministic":
+        top = DeterministicTOP(problem_def)
+    elif Problem_Type.lower() == "stochastic_gauss_zoh":
+        top = StochasticTOP(problem_def)
+    else:
+        raise ValueError(f"Unknown Problem_Type: {Problem_Type!r}")
 
-    # Optimization functions
-    vals, grad, sens = prepare_opt_funcs(Boundary_Conds, iterators, propagators, models, Sys, dyn_args, replace(cfg_args, N_save=2))
+    print("variables:", [v.name for v in top.variables()])
+    print("constraints:", [c.name for c in top.constraints()])
 
-    # Set up initial guess and hot starter
+    # Initial guess (+ optional hot start) --------------------------------------
     print("Setting Up Initial Guess")
-    U_rng_vals = {'key': 1, 'var': 1e-3}
-    init_guess, dyn_args = make_InitGuess(Problem_Type, Gain_Parametrization_Type, Node_Resampling, Boundary_Conds, cfg_args, dyn_args, U_rng_vals, hot_start_file)
+    init_guess = random_init_guess(top.variables(), jax.random.PRNGKey(SEED))
+    if hot_start_file is not None:
+        init_guess = {**init_guess, **hot_start_init_guess(hot_start_file, top.variables())}
 
-
-    # Process Sparsity for SNOPT
+    # Build the pyoptsparse problem (addVarGroup/addConGroup + sparsity) ---------
     print("Processing SNOPT Gradient Sparsity")
-    grad_nonsparse = grad(init_guess)
-    grad_proc_sparse = process_sparsity(grad_nonsparse)
-    
+    optprob, sens = top.to_pyoptsparse(init_guess)
 
-    # Optimal Control Problem
-    optprop = Optimization("Forward Backward Direct Trajectory Optimization", vals)
-
-    # Create Variables
-    optprop.addVarGroup('U_arc_hst', 3*cfg_args.N_arcs, "c", value = init_guess['U_arc_hst'], lower = -1, upper = 1)
-    optprop.addVarGroup('X0', 7, "c", value = init_guess['X0'], lower=[-10, -10, -10, -10, -10, -10, 1e-1], upper=[10, 10, 10, 10, 10, 10, 1])
-    optprop.addVarGroup('Xf', 7, "c", value = init_guess['Xf'], lower=[-10, -10, -10, -10, -10, -10, 1e-1], upper=[10, 10, 10, 10, 10, 10, 1])
-    if Adaptive_Mesh_Type.lower() == 'adaptive_fixedtof':
-        optprop.addVarGroup('t_node_bound', cfg_args.N_nodes, "c", value = init_guess['t_node_bound'], lower = 0, upper = init_guess['t_node_bound'][-1])
-    if Problem_Type == 'stochastic_gauss_zoh':
-        optprop.addVarGroup('gain_weights', cfg_args.N_arcs*2, "c", value = init_guess['gain_weights'], lower = 1e-6)
-    if cfg_args.free_phasing:
-        optprop.addVarGroup('alpha', 1, "c", value = init_guess['alpha'], lower = Boundary_Conds['alpha_min'], upper = Boundary_Conds['alpha_max'])
-        optprop.addVarGroup('beta', 1, "c", value = init_guess['beta'], lower = Boundary_Conds['beta_min'], upper = Boundary_Conds['beta_max'])
-
-    # Create Objective
-    optprop.addObj('o')
-
-    # Create Constraints
-    optprop.addConGroup('c_Us', cfg_args.N_arcs, upper = 1, jac = grad_proc_sparse['c_Us'])
-    if Adaptive_Mesh_Type.lower() == 'adaptive_fixedtof':
-        mesh_con_terms = adaptive_mesh_con_terms(init_guess['t_node_bound'])
-        optprop.addConGroup('c_t_node_bound', cfg_args.N_nodes+1, 
-                            linear=True, wrt = 't_node_bound', lower = mesh_con_terms['lower'], upper = mesh_con_terms['upper'], jac = {'t_node_bound': mesh_con_terms['jac']})
-    if Problem_Type == 'stochastic_gauss_zoh':
-        optprop.addConGroup('c_P_Xf', 1, upper = 0, jac = grad_proc_sparse['c_P_Xf'])
-    optprop.addConGroup('c_X0', 7, lower = 0, upper = 0, jac = grad_proc_sparse['c_X0'])
-    optprop.addConGroup('c_Xf', 6, lower = 0, upper = 0, jac = grad_proc_sparse['c_Xf'])
-    optprop.addConGroup('c_X_mp', 7, lower = 0, upper = 0, jac = grad_proc_sparse['c_X_mp'])
-    if cfg_args.det_col_avoid and not cfg_args.stat_col_avoid:
-        optprop.addConGroup('c_det_col_avoid', cfg_args.N_arcs*cfg_args.N_subarcs, upper = 0, jac = grad_proc_sparse['c_det_col_avoid'])
-    if cfg_args.stat_col_avoid and Problem_Type != 'deterministic':
-        optprop.addConGroup('c_stat_col_avoid', cfg_args.N_nodes, upper = 0, jac = grad_proc_sparse['c_stat_col_avoid'])
-    
-    # Run Optimization
+    # Solve ---------------------------------------------------------------------
     print('SNOPT Starting')
     start_time = time.time()
-    optSNOPT = SNOPT(options = optOptions)
-    sol = optSNOPT(optprop, sens = sens, timeLimit = None)
-    print('SNOPT Finished: %s'%(sol.optInform['text']))
+    sol = SNOPT(options=optOptions)(optprob, sens=sens, timeLimit=None)
+    print('SNOPT Finished: %s' % (sol.optInform['text']))
     print("Elapsed Time: %.3f" % (time.time() - start_time))
 
-    # Save Optimization Solution
-    save_OptimizerSol(sol, cfg_args, dyn_args, OptimSol_save_file)
+    # Save the solution + its case manifest -------------------------------------
+    t_node_bound = (sol.xStar['t_node_bound'] if Adaptive_Mesh_Type.lower() == 'adaptive_fixedtof'
+                    else problem_def.boundary_conditions.t_node_bound)
+    os.makedirs(case_dir, exist_ok=True)
+    save_solution(os.path.join(case_dir, "sol.h5"), sol.xStar, t_node_bound)
+    write_case_yaml(case_dir, scenario, toggles)
+    print(f"\nSaved solution + case.yaml to {case_dir}")
 
-    # Analyze and Save Results
-    allData = prepare_sol(sol, Sys, Boundary_Conds, propagators, models, dyn_args, cfg_args)
-    save_sol(allData, Sys, save_file,dyn_args, cfg_args)
-
-
+    if Generate_Data:
+        from generate_data import generate_data
+        generate_data(case_dir)

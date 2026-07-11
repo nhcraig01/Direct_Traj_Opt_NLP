@@ -1,0 +1,26 @@
+# Per-case derived artifacts under Results/<scenario>/<case>/ - regenerable
+# via generate_data.py + plot_traj.py (some data.h5 files run into the GB
+# range with 1000 MC trials). sol.h5 + case.yaml are NOT ignored here - they
+# are the actual (tiny, ~8KB) solve results and are committed so a fresh
+# clone can regenerate/replot without re-solving.
+Results/*/*/data.h5
+Results/*/*/Sys.mat
+Results/*/*/*.png
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Solver / run artifacts
+SNOPT_print.out
+SNOPT_summary.out
+*.out
+
+# MATLAB scratch
+*.asv
+
+# OS / editor cruft
+desktop.ini
+.DS_Store
