@@ -24,3 +24,7 @@ SNOPT_summary.out
 # OS / editor cruft
 desktop.ini
 .DS_Store
+
+# Claude Code - personal/local, not meant to be shared
+.claude/settings.local.json
+.claude/worktrees/

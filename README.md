@@ -29,7 +29,8 @@ pipeline is differentiable and runs equally well with or without a GPU.
 
 ## Install
 
-Everything except the solver installs the normal way:
+Everything, including the solver, builds into one `.venv` — there's no
+separate environment for SNOPT/`pyoptsparse`.
 
 ```bash
 python -m venv .venv
@@ -45,38 +46,38 @@ codebase, but not enough to actually run SNOPT yet.
 list: `pip install pyoptsparse` from PyPI builds a version with no SNOPT
 bindings, which "succeeds" while leaving the solver completely
 non-functional. It has to be built for real, against your licensed SNOPT,
-per the section below.
+into this same `.venv`, per the section below.
 
 ### SNOPT / pyoptsparse setup
 
-This is written for WSL2/Ubuntu + Anaconda (the environment this project is
-developed in); the same steps apply directly on native Linux, and mostly
-apply on macOS.
+This is written for WSL2/Ubuntu (apt); the same steps apply directly on
+native Linux, and on macOS with Homebrew in place of apt. Do this after
+[Install](#install) above — `.venv` should already exist and be activated.
 
 1. **Get SNOPT.** Obtain a licensed SNOPT7 source distribution (e.g. through
    your institution) and place it somewhere accessible, e.g. `~/snopt7`.
-2. **Create an environment.**
+2. **Install system build dependencies:**
    ```bash
-   conda create -n traj_opt python=3.12
-   conda activate traj_opt
-   conda config --add channels conda-forge
-   conda config --set channel_priority strict
+   sudo apt install swig libblas-dev liblapack-dev   # macOS: brew install swig openblas lapack
    ```
-3. **Install this project's dependencies** (see [Install](#install) above)
-   into that same environment: `pip install -e .`.
-4. **Build `pyoptsparse` against SNOPT** using MDO Lab's build tool:
+3. **Build `pyoptsparse` against SNOPT**, into the active `.venv`, using MDO
+   Lab's build tool:
    ```bash
-   mkdir -p ~/repos && cd ~/repos
-   git clone https://github.com/OpenMDAO/build_pyoptsparse.git
-   python -m pip install ./build_pyoptsparse
-   sudo apt install swig python3 python3-pip libblas-dev liblapack-dev
+   git clone --branch <tag> --depth 1 https://github.com/OpenMDAO/build_pyoptsparse.git /tmp/build_pyoptsparse
+   pip install /tmp/build_pyoptsparse
    build_pyoptsparse -s ~/snopt7
    ```
+   Pin `<tag>` to a specific released version (see the repo's
+   [Releases page](https://github.com/OpenMDAO/build_pyoptsparse/releases))
+   rather than tracking `main`, so the build is reproducible — the clone
+   itself is scratch, nothing from it needs to stay around afterward.
+
    `build_pyoptsparse` will print an environment-variable command near the
    end (pointing the dynamic linker at the built SNOPT library) — run it,
    and add it to your shell profile so it persists across terminals.
-5. **Verify:** `python -c "from pyoptsparse.pySNOPT.pySNOPT import SNOPT; print('OK')"`
-   should import cleanly with no missing-library errors.
+4. **Verify:** `python -c "from pyoptsparse.pySNOPT.pySNOPT import SNOPT; print('OK')"`
+   should import cleanly with no missing-library errors, in the same
+   `.venv` used for everything else.
 
 ## Repo layout
 
