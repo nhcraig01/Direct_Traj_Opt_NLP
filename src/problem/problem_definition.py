@@ -120,6 +120,7 @@ class Toggles:
     """Problem-type switches that drive which classes build_problem() constructs
     and which branches TOP.variables()/objective()/evaluate() take."""
     problem_type: str = "deterministic"       # "deterministic" | "stochastic_gauss_zoh"
+    control_representation: str = "cartesian"  # "cartesian" | "regularized"
     feedback_control_type: str = "true_state"  # "true_state" | "estimated_state"
     measurements: tuple = ()                   # e.g. ("range", "range-rate", "angles")
     gain_param_type: str = "fulltraj_lqr"      # "arc_lqr" | "fulltraj_lqr"

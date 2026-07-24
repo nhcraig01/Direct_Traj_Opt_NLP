@@ -74,20 +74,23 @@ def process_sparsity(grad_nonsparse):
 # Solution (sol.h5) I/O
 # --------------------------------------------------------------------------- #
 
-_SOL_KEYS = ('X0', 'Xf', 'U_arc_hst', 't_node_bound', 'alpha', 'beta', 'gain_weights')
+_SOL_KEYS = ('X0', 'Xf', 'U_arc_hst', 'U_reg_arc_hst', 't_node_bound', 'alpha', 'beta', 'gain_weights')
 
 
 def save_solution(path, xStar, t_node_bound):
     """Write the optimizer solution to sol.h5. t_node_bound is passed explicitly
-    (it is a fixed-mesh constant, not an xStar variable, unless adaptive)."""
+    (it is a fixed-mesh constant, not an xStar variable, unless adaptive) and
+    written unconditionally; every other key is written iff xStar actually has
+    it, so this covers X0/Xf (always present), U_arc_hst OR U_reg_arc_hst
+    (exactly one present, depending on control_representation), and the
+    genuinely-optional alpha/beta/gain_weights - all with the same rule."""
     with h5py.File(path, "w") as f:
-        f.create_dataset('X0', data=np.asarray(xStar['X0']))
-        f.create_dataset('Xf', data=np.asarray(xStar['Xf']))
-        f.create_dataset('U_arc_hst', data=np.asarray(xStar['U_arc_hst']))
-        f.create_dataset('t_node_bound', data=np.asarray(t_node_bound))
-        for k in ('alpha', 'beta', 'gain_weights'):
+        for k in _SOL_KEYS:
+            if k == 't_node_bound':
+                continue
             if k in xStar:
                 f.create_dataset(k, data=np.asarray(xStar[k]))
+        f.create_dataset('t_node_bound', data=np.asarray(t_node_bound))
 
 
 def load_solution(path) -> dict:

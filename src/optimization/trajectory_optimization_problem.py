@@ -14,7 +14,7 @@ from pyoptsparse import Optimization
 from .constraints import (
     Constraint,
     BoundaryConstraint, ControlNormConstraint, CovarianceConstraint, DetCollisionAvoidanceConstraint,
-    MatchPointConstraint, MeshConstraint,
+    MatchPointConstraint, MeshConstraint, ControlNormRegConstraint
 )
 from src.dynamics.equations_of_motion import CR3BPDynamics
 from src.dynamics.propagator import Propagator, StatePropagator, StateSensitivityPropagator
@@ -25,6 +25,7 @@ from src.stochastic.error_propagator import (
 )
 from src.stochastic.gain_parameterization import LQRArcGains, LQRFullTrajGains
 from src.utils.io import process_sparsity
+from src.utils.math_utils import U_reg_to_U_vmap
 
 
 class TrajectoryOptimizationProblem:
@@ -186,6 +187,107 @@ class DeterministicTOP(TrajectoryOptimizationProblem):
         return J
 
     def evaluate(self, inputs: dict) -> dict:
+        sol_data = self.propagate(dict(inputs))
+
+        output = {'o': self.objective(sol_data)}
+        for c in self.constraints():
+            if c.linearities:
+                continue  # linear constraints evaluated by pyoptsparse via their jac, not vals()
+            output[c.name] = c.evaluate(self._problem_def, sol_data)
+
+        fmt, args = self._constraint_print_terms(output)
+        jax.debug.print("J: {:.3e}" + fmt, output['o'], *args)
+
+        return output
+
+class DeterministicTOPReg(TrajectoryOptimizationProblem):
+    def __init__(self, problem_def: ProblemDefinition):
+        propagator = StatePropagator(problem_def, CR3BPDynamics(problem_def))
+        constraints_list = [
+            BoundaryConstraint(problem_def, "initial"),
+            BoundaryConstraint(problem_def, "final"),
+            MatchPointConstraint(problem_def),
+            ControlNormRegConstraint(problem_def),
+        ]
+        if problem_def.toggles.adaptive_mesh_type.lower() == 'adaptive_fixedtof':
+            constraints_list.append(MeshConstraint(problem_def))
+        if problem_def.toggles.det_col_avoid and not problem_def.toggles.stat_col_avoid:
+            constraints_list.append(DetCollisionAvoidanceConstraint(problem_def))
+        super().__init__(problem_def, propagator, constraints_list)
+
+    def variables(self) -> list[OptimizationVariable]:
+        dims = self._problem_def.dims
+        bc = self._problem_def.boundary_conditions
+
+        U_size = dims.control_dim * dims.N_arcs
+
+        variables_list = [
+            OptimizationVariable(
+                name='U_reg_arc_hst', size=U_size,
+                lower=-jnp.ones(U_size), upper=jnp.ones(U_size), value=jnp.zeros(U_size),
+                guess_fn=lambda key: jnp.sqrt(1e0) * jax.random.normal(key, shape=(U_size,)),
+            ),
+            OptimizationVariable(
+                name='X0', size=dims.state_dim,
+                lower=jnp.array([-10., -10., -10., -10., -10., -10., 1e-1]),
+                upper=jnp.array([10., 10., 10., 10., 10., 10., 1.]),
+                value=jnp.concatenate([bc.X0_init, jnp.array([1.0])]),
+                guess_fn=lambda key: jnp.concatenate([
+                    bc.X0_interp.evaluate(jax.random.uniform(key, minval=bc.alpha_min, maxval=bc.alpha_max)),
+                    jnp.array([1.0]),
+                ]),
+            ),
+            OptimizationVariable(
+                name='Xf', size=dims.state_dim,
+                lower=jnp.array([-10., -10., -10., -10., -10., -10., 1e-1]),
+                upper=jnp.array([10., 10., 10., 10., 10., 10., 1.]),
+                value=jnp.concatenate([bc.Xf_init, jnp.array([0.95])]),
+                guess_fn=lambda key: jnp.concatenate([
+                    bc.Xf_interp.evaluate(jax.random.uniform(key, minval=bc.beta_min, maxval=bc.beta_max)),
+                    jnp.array([0.95]),
+                ]),
+            ),
+            OptimizationVariable(
+                name='alpha', size=1,
+                lower=jnp.asarray(bc.alpha_min), upper=jnp.asarray(bc.alpha_max), value=jnp.asarray(bc.alpha_min),
+                guess_fn=lambda key: jax.random.uniform(key, minval=bc.alpha_min, maxval=bc.alpha_max),
+            ),
+            OptimizationVariable(
+                name='beta', size=1,
+                lower=jnp.asarray(bc.beta_min), upper=jnp.asarray(bc.beta_max), value=jnp.asarray(bc.beta_min),
+                guess_fn=lambda key: jax.random.uniform(key, minval=bc.beta_min, maxval=bc.beta_max),
+            ),
+        ]
+
+        if self._problem_def.toggles.adaptive_mesh_type.lower() == 'adaptive_fixedtof':
+            variables_list.append(OptimizationVariable(
+                name='t_node_bound', size=dims.N_nodes,
+                lower=jnp.zeros(dims.N_nodes), upper=jnp.full(dims.N_nodes, bc.t_node_bound[-1]),
+                value=bc.t_node_bound, guess_fn=lambda key: bc.t_node_bound,
+            ))
+
+        return variables_list
+
+    def objective(self, sol_data: dict) -> float:
+        dims = self._problem_def.dims
+
+        U_reg_arc_hst = sol_data['U_reg_arc_hst'].reshape(dims.N_arcs, dims.control_dim)
+        control_reg_dot = jnp.sum(U_reg_arc_hst ** 2, axis=1)
+
+        t_node_bound = sol_data['t_node_bound']
+        arc_length_hst = jnp.diff(t_node_bound)
+        J = control_reg_dot @ arc_length_hst
+
+        if self._problem_def.toggles.adaptive_mesh_type.lower() != 'fixed':
+            dt_even = (t_node_bound[-1] - t_node_bound[0]) / dims.N_arcs
+            rel_dt_err = arc_length_hst / dt_even - 1.0
+            J = J + 1e-6 * (rel_dt_err @ rel_dt_err)
+
+        return J
+
+    def evaluate(self, inputs: dict) -> dict:
+        dims = self._problem_def.dims
+        inputs['U_arc_hst'] = U_reg_to_U_vmap(inputs['U_reg_arc_hst'].reshape(dims.N_arcs, dims.control_dim)).flatten()
         sol_data = self.propagate(dict(inputs))
 
         output = {'o': self.objective(sol_data)}

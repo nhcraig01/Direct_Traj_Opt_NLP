@@ -34,7 +34,7 @@ from src.postprocess.detailed_trajectory import generate_detailed_data
 from src.utils.io import yaml_load, load_solution, save_results
 from src.stochastic.mc_runner import EstimatedStateMCRunner, TrueStateMCRunner
 from src.problem.problem_definition import build_problem_def
-from src.optimization.trajectory_optimization_problem import DeterministicTOP, StochasticTOP
+from src.optimization.trajectory_optimization_problem import DeterministicTOP, DeterministicTOPReg, StochasticTOP
 
 
 def generate_data(case_dir, seed=0):
@@ -43,8 +43,14 @@ def generate_data(case_dir, seed=0):
     scenario, toggles = load_case_spec(case_dir)
     problem_def = build_problem_def(yaml_load(f"Scenarios/{scenario}.yaml"), toggles)
 
+    regularized = toggles.control_representation.lower() == 'regularized'
     stochastic = toggles.problem_type.lower() == 'stochastic_gauss_zoh'
-    top = StochasticTOP(problem_def) if stochastic else DeterministicTOP(problem_def)
+    if not stochastic and regularized:
+        top = DeterministicTOPReg(problem_def)
+    elif not stochastic and not regularized:
+        top = DeterministicTOP(problem_def)
+    elif stochastic:
+        top = StochasticTOP(problem_def)
     xStar = load_solution(os.path.join(case_dir, 'sol.h5'))
 
     print("Evaluating detailed deterministic trajectory...")
@@ -73,7 +79,7 @@ if __name__ == "__main__":
     # Case selection (same style as plot_traj.py). The toggles used to rebuild
     # the problem come from the case's case.yaml; these just locate the dir.
     scenario = "L2_S-NRHO_to_L2_N-NRHO"
-    Problem_Type = "stochastic_gauss_zoh"          # deterministic | stochastic_gauss_zoh
+    Problem_Type = "deterministic"          # deterministic | stochastic_gauss_zoh
     Feedback_Control_Type = "true_state"           # true_state | true_state_sqrt | estimated_state
     Measurements = ("range", "range-rate", "angles")
 

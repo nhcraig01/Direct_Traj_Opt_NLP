@@ -104,3 +104,19 @@ def adaptive_mesh_con_terms(t_node_bound, dt_min=1e-5, dt_max=1e6):
     upper = jnp.zeros(n + 1).at[0].set(0.0).at[1:n].set(dt_max).at[-1].set(tf)
 
     return {'jac': jac, 'lower': lower, 'upper': upper}
+
+# --------------------------------------------------------------------------- #
+# Control Functions (Regularization)
+# --------------------------------------------------------------------------- #
+
+def U_reg_to_U(U_reg):
+    """Convert regularized control to cartesian through non-linear transform"""
+    u, w, s = U_reg[0], U_reg[1], U_reg[2]
+
+    U_x = u**2 - w**2 - s**2
+    U_y = 2 * u * w
+    U_z = 2 * u * s
+    U_cart = jnp.array([U_x, U_y, U_z])
+    return U_cart
+
+U_reg_to_U_vmap = jax.vmap(U_reg_to_U, in_axes=(0,))

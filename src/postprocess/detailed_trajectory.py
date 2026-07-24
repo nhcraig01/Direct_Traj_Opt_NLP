@@ -21,7 +21,7 @@ import jax.numpy as jnp
 
 from src.stochastic.control_noise import gates2Gexe
 from src.stochastic.error_propagator import TrueStateCovPropagator, EstimatedStateCovPropagator
-from src.utils.math_utils import cart2sph_vmap, mat_lmax
+from src.utils.math_utils import cart2sph_vmap, mat_lmax, U_reg_to_U_vmap
 
 
 def _orbit_history(prop, X, t_hst):
@@ -41,6 +41,7 @@ def generate_detailed_data(problem_def, top, xStar):
     post_len = dims.post_insert_length
     length = dims.length
 
+    regularized = problem_def.toggles.control_representation.lower() == 'regularized'
     stochastic = problem_def.toggles.problem_type.lower() == 'stochastic_gauss_zoh'
     estimated = problem_def.toggles.feedback_control_type.lower() == 'estimated_state'
 
@@ -51,7 +52,11 @@ def generate_detailed_data(problem_def, top, xStar):
 
     prop = top._propagator
     X0, Xf = xStar['X0'], xStar['Xf']
-    U_arc_hst = xStar['U_arc_hst'].reshape(N_arcs, m)
+    if regularized:
+        U_reg_arc_hst = xStar['U_reg_arc_hst'].reshape(N_arcs, m)
+        U_arc_hst = U_reg_to_U_vmap(U_reg_arc_hst)
+    else:
+        U_arc_hst = xStar['U_arc_hst'].reshape(N_arcs, m)
     if problem_def.toggles.adaptive_mesh_type.lower() == 'adaptive_fixedtof':
         t_node = xStar['t_node_bound']
     else:

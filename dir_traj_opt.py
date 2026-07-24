@@ -31,7 +31,7 @@ from src.utils.io import yaml_load, save_solution
 from src.problem.case_manifest import write_case_yaml
 from src.optimization.init_guess import hot_start_init_guess, random_init_guess
 from src.problem.problem_definition import Toggles, build_problem_def
-from src.optimization.trajectory_optimization_problem import DeterministicTOP, StochasticTOP
+from src.optimization.trajectory_optimization_problem import DeterministicTOP, DeterministicTOPReg, StochasticTOP
 
 
 if __name__ == "__main__":
@@ -40,13 +40,16 @@ if __name__ == "__main__":
     # Scenarios (Scenarios/<scenario>.yaml):
     #   L2_S-NRHO_to_L2_N-NRHO / L1_N-HO_to_L2_N-HO / L1_Lyap_to_L2_Lyap
     #   L2_S-HO_to_L1_Lyap / L2_S-HO_to_L4_N-Axial / Sandbox
-    scenario = "L1_N-HO_to_L2_N-HO"
+    scenario = "Sandbox"
 
     # Problem Types:  deterministic | stochastic_gauss_zoh
-    Problem_Type = "stochastic_gauss_zoh"
+    Problem_Type = "deterministic"
+
+    # Control Representation (stoch must be cart rn):  cartesian | regularized
+    Control_Representation = "regularized"
 
     # Adaptive Mesh:  fixed | adaptive_fixedtof
-    Adaptive_Mesh_Type = "fixed"
+    Adaptive_Mesh_Type = "adaptive_fixedtof"
 
     # Gain Parameterization (stochastic only):  arc_lqr | fulltraj_lqr
     Gain_Parametrization_Type = "fulltraj_lqr"
@@ -64,18 +67,18 @@ if __name__ == "__main__":
     # phasing); widen e.g. to (0.0, 1.0) to let the optimizer pick a phase along
     # the whole orbit. Collision avoidance is toggled via the scenario yaml's
     # constraints.col_avoid block, not here.
-    Alpha_Rng = (0.0, 0.0)
-    Beta_Rng = (0.0, 0.0)
+    Alpha_Rng = (0.0, 1.0)
+    Beta_Rng = (0.0, 1.0)
 
     # Hot Start: a CASE name to warm-start from (reads Results/<scenario>/<case>/
     # sol.h5), or None. Variable shapes must match this run's exactly (node
     # resampling isn't ported).
-    Hot_Start_Case = "stochastic_gauss_zoh_true_state"
+    Hot_Start_Case = None
 
-    SEED = 7
+    SEED = 2
 
     # Chain generate_data.py after solving to also produce data.h5 for plotting.
-    Generate_Data = False
+    Generate_Data = True
     # ---------------------------------------------------------------------------
 
     # Case directory + files (Results/<scenario>/<case>/) -----------------------
@@ -99,7 +102,7 @@ if __name__ == "__main__":
                   'Linesearch tolerance': .99,
                   'Function precision': 1e-10,
                   'Verify level': -1,
-                  'Nonderivative linesearch': 0,
+                  'Nonderivative linesearch': 1,
                   'Major step limit': 1e0 if hot_start_file is None else 1e-3,
                   'Elastic weight': 1.e4}
     # ---------------------------------------------------------------------------
@@ -108,6 +111,7 @@ if __name__ == "__main__":
     config = yaml_load(config_file)
     toggles = Toggles(
         problem_type=Problem_Type,
+        control_representation=Control_Representation,
         feedback_control_type=Feedback_Control_Type,
         measurements=Measurements,
         gain_param_type=Gain_Parametrization_Type,
@@ -118,7 +122,10 @@ if __name__ == "__main__":
     problem_def = build_problem_def(config, toggles)
 
     if Problem_Type.lower() == "deterministic":
-        top = DeterministicTOP(problem_def)
+        if Control_Representation.lower() == "cartesian":
+            top = DeterministicTOP(problem_def)
+        elif Control_Representation.lower() == "regularized":
+            top = DeterministicTOPReg(problem_def)
     elif Problem_Type.lower() == "stochastic_gauss_zoh":
         top = StochasticTOP(problem_def)
     else:

@@ -96,6 +96,25 @@ class ControlNormConstraint(Constraint):
 
         stochastic_term = self._error_propagator.stochastic_control_term(problem_def, sol_data)
         return (control_norms + stochastic_term).flatten()
+    
+class ControlNormRegConstraint(Constraint):
+    """c_Us. Always includes control_norms; if an error_propagator is given
+    (StochasticTOP only), also adds its stochastic_control_term()."""
+
+    def __init__(self, problem_def: ProblemDefinition, error_propagator: ErrorPropagator | None = None):
+        self._error_propagator = error_propagator
+        size = problem_def.dims.N_arcs
+        super().__init__(name="c_Us", size=size, lower=-jnp.inf * jnp.ones(size), upper=jnp.ones(size))
+
+    def evaluate(self, problem_def: ProblemDefinition, sol_data: dict) -> Array:
+        U_reg_arc_hst = sol_data['U_reg_arc_hst'].reshape(problem_def.dims.N_arcs, problem_def.dims.control_dim)
+        control_norms = jnp.sum(U_reg_arc_hst ** 2, axis=1)
+
+        if self._error_propagator is None:
+            return control_norms.flatten()
+
+        stochastic_term = self._error_propagator.stochastic_control_term(problem_def, sol_data)
+        return (control_norms + stochastic_term).flatten()
 
 
 class MeshConstraint(Constraint):

@@ -12,6 +12,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .ipynb_checkpoints/
+.venv/
 
 # Solver / run artifacts
 SNOPT_print.out

@@ -27,6 +27,7 @@ def write_case_yaml(case_dir: str, scenario: str, toggles: Toggles) -> str:
     spec = {
         'scenario': scenario,
         'problem_type': toggles.problem_type,
+        'control_representation': toggles.control_representation,
         'feedback_control_type': toggles.feedback_control_type,
         'measurements': list(toggles.measurements),
         'gain_param_type': toggles.gain_param_type,
@@ -46,6 +47,7 @@ def load_case_spec(case_dir: str) -> tuple[str, Toggles]:
         spec = yaml.safe_load(f)
     toggles = Toggles(
         problem_type=spec['problem_type'],
+        control_representation=spec['control_representation'],
         feedback_control_type=spec['feedback_control_type'],
         measurements=tuple(spec['measurements']),
         gain_param_type=spec['gain_param_type'],

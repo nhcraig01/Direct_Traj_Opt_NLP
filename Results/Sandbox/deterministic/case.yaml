@@ -1,15 +1,16 @@
 scenario: Sandbox
 problem_type: deterministic
+control_representation: regularized
 feedback_control_type: true_state
 measurements:
 - range
 - range-rate
 - angles
 gain_param_type: fulltraj_lqr
-adaptive_mesh_type: fixed
+adaptive_mesh_type: adaptive_fixedtof
 alpha_rng:
 - 0.0
-- 0.0
+- 1.0
 beta_rng:
 - 0.0
-- 0.0
+- 1.0

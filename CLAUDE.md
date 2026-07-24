@@ -17,14 +17,15 @@ to stay a small, high-signal document, not a running log.
 Branch `pre_release_cleanup_and_restructure` is functionally complete and
 verified — it's the sole codebase in the repo (`Lib/` and all legacy scripts
 were deleted back on 2026-07-07/10). It is a clean fast-forward of `main`
-(no divergence). **Not yet merged/tagged as v1.0.0** — the user wants to do
-that only after:
+(no divergence).
 
-1. A README/polish pass on this branch (in progress — see below for what's
-   already done).
-2. Confirming the whole setup runs cleanly on a **new Mac** the user is in
-   the process of migrating to (currently developing on WSL2/Ubuntu +
-   Windows). This is the actual gating step — nothing else is blocking.
+**Both original v1.0.0 gating items are now done**: the README/polish pass,
+and a genuine from-scratch install + full pipeline validation on the new
+Mac (see "macOS setup" below) — the Mac is now the user's primary machine
+going forward, migrating off WSL2/Ubuntu + Windows. **Still not
+merged/tagged as v1.0.0** — that's a separate, deliberate action for the
+user to explicitly request, not something to do just because the checklist
+above is now clear.
 
 **Do not merge to `main`, tag, or push to `origin` without the user's
 explicit go-ahead in that specific moment.** This project's established norm
@@ -55,7 +56,7 @@ functional audit** from 2026-07-10 (5 parallel agents covered ~55
 legacy functions field-by-field; only gap found was `stat_col_avoid`, see
 Known gaps below).
 
-### README changes made this session
+### README changes made on the WSL machine (README-polish session)
 
 - Unified install onto a single `.venv` — the old instructions had two
   disconnected environments (a `.venv` from `pip install -e .`, then a
@@ -68,17 +69,79 @@ Known gaps below).
 - `build_pyoptsparse` clone is now pinned to a specific release tag rather
   than tracking `main`, for reproducibility.
 
-**This `.venv`-only approach is unvalidated** — it was written based on
-reasoning about what should work, not a real from-scratch build. The
-existing, actually-working setup on the WSL machine is two conda
-environments (`snopt_traj_opt` and `snopt_env`, both have `jax`+
-`pyoptsparse`+SNOPT built in; `snopt_traj_opt` is the one actually used day
-to day — it's first on `$PATH`). **The first real task on the new Mac should
-be a genuine from-scratch install following the rewritten README**, and the
-README should be corrected against whatever actually happens, not assumed
-correct.
+This was written based on reasoning about what should work, not a real
+from-scratch build, at the time. It has since been **validated for real**
+on the Mac migration session below — corrections made there are folded
+into the README directly, and summarized in "macOS setup" next.
 
-### A live gotcha hit this session (environment/IDE, not code)
+### macOS setup — validated (Mac migration session, 2026-07-19)
+
+Full from-scratch install on a new M5 Pro MacBook Pro (Apple Silicon,
+Homebrew at `/opt/homebrew`), done live and corrected against the README as
+it went. The README now reflects all of this — this section is the "why"
+behind those changes, worth keeping in case the README ever needs
+re-deriving or something regresses:
+
+- **Homebrew wasn't preinstalled**; Xcode Command Line Tools were. Its
+  installer needs a real interactive `sudo` password prompt, so this step
+  can't be run unattended by an agent — has to be done directly by the
+  user in their own terminal.
+- **System Python is 3.9.6** (`/usr/bin/python3`, Apple's bundled one, too
+  old for this project's `>=3.10` floor). Used `brew install python@3.12`
+  (a *versioned* formula, not the generic `python3` one) — lands at
+  `/opt/homebrew/bin/python3.12` without touching the system Python or
+  becoming the default `python3`/`pip3` on `PATH`.
+- **`.venv/` was missing from `.gitignore`** — never existed in this repo
+  before now (no `.venv` had ever been created here). Fixed.
+- **`.vscode/settings.json`'s `python-envs.defaultEnvManager`/
+  `defaultPackageManager`** flipped from `conda` (correct for the WSL
+  machine — see the gotcha below) to `venv`. This is a committed/shared
+  file, so the change affects any other clone too — deliberate, since the
+  Mac is now primary.
+- A clean VS Code install has **no Python extension by default** —
+  `code --install-extension ms-python.python` (pulls in Pylance too) is
+  required before "Python: Select Interpreter" even exists as a command.
+- **`openblas`/`lapack` install "keg-only"** on macOS (not symlinked into
+  `/opt/homebrew`, since macOS ships its own via `Accelerate.framework`) —
+  needs `LDFLAGS`/`CPPFLAGS` pointed at
+  `/opt/homebrew/opt/{openblas,lapack}` during the `pyoptsparse` build.
+- **`gfortran` has no standalone Homebrew formula** — it ships bundled
+  inside `gcc` (`brew install gcc`). Apple's Clang toolchain has no Fortran
+  compiler, and SNOPT's source is Fortran 77, so this is a hard
+  requirement the old apt-based wording didn't make obvious.
+- **Real upstream bug hit in `build_pyoptsparse` v2.0.13**:
+  `install_mumps_from_src()` discards `git_clone()`'s return value (a
+  `tempfile.TemporaryDirectory`), so CPython garbage-collects it —
+  deleting the freshly cloned MUMPS source, including `get.Mumps`, before
+  the very next line runs. Confirmed by reproducing the clone+checkout
+  manually (file's there and executable right after checkout) and by
+  diffing against `install_metis_from_src()`, which *does* capture the
+  return value and works fine right next to it. Workaround: the
+  `-d`/`--no-delete` CLI flag switches to a `tempfile.mkdtemp()` path with
+  no auto-cleanup finalizer, sidestepping the bug entirely. Worth
+  rechecking on whatever version is current next time — may be fixed
+  upstream by then.
+- **`DYLD_LIBRARY_PATH`** (macOS's `LD_LIBRARY_PATH` equivalent) is needed
+  at `pyoptsparse` *import* time, not just once during the build — scoped
+  it into `.venv/bin/activate` itself (set on activate, restored on
+  deactivate) rather than the shell profile, so it only applies when this
+  venv is active.
+- End-to-end verified working: `pip install -e .` (every dependency landed
+  as a prebuilt arm64 wheel, no source builds needed, including usually-
+  finicky ones like `scipy`/`numpy`/`astropy`), JAX reports a `CpuDevice`,
+  `pyoptsparse`/SNOPT import cleanly, `generate_data.py` replay and a real
+  cold-start SNOPT solve (`dir_traj_opt.py`, deterministic,
+  `L2_S-NRHO_to_L2_N-NRHO`) both completed successfully, and MATLAB
+  `Plotting.m` was repointed and plots correctly.
+- **`Plotting/Plotting.m`'s `repo` variable was updated** — but only in the
+  live OneDrive copy the user actually runs from
+  (`OneDrive - purdue.edu/Grad School/Project Code/Direct_Traj_Opt_NLP/Plotting/Plotting.m`),
+  **not** in the repo's own tracked `Plotting` symlink (still points at the
+  old WSL UNC path, still broken on macOS). Fixing that symlink was
+  explicitly deferred by the user this session — still open, see
+  "Environment / setup notes" below.
+
+### A gotcha hit on the WSL machine (README-polish session)
 
 Editing `.vscode/settings.json`'s `python-envs.defaultEnvManager` /
 `defaultPackageManager` (from `conda` to `venv`, to match the new README) at
@@ -97,16 +160,25 @@ often the actual fix.
 
 ## Environment / setup notes
 
-- **This WSL machine**: two working conda envs exist, `snopt_traj_opt`
+- **Old WSL machine**: two working conda envs exist, `snopt_traj_opt`
   (the one on `$PATH`, used for everything) and `snopt_env` (also has
   `jax`+`pyoptsparse`, less commonly used). Both have SNOPT-enabled
-  `pyoptsparse` built in.
-- **New Mac**: not set up yet. Plan is plain `.venv` + `pip install -e .` +
-  `build_pyoptsparse` per the rewritten README — see "unvalidated" note
-  above.
-- `Plotting/Plotting.m` (MATLAB) currently points `repo` at a WSL UNC path
-  (`\\wsl.localhost\Ubuntu-22.04\...`) with a comment already anticipating
-  the Mac move — after migrating, just change `repo` to a local path.
+  `pyoptsparse` built in. Being migrated away from — the Mac below is now
+  primary.
+- **New Mac (now primary, set up + validated 2026-07-19)**: Homebrew at
+  `/opt/homebrew`, `python@3.12`, a project-local `.venv` (gitignored) with
+  `pip install -e .` plus `pyoptsparse`+SNOPT built directly in via
+  `build_pyoptsparse`. Licensed SNOPT7 source lives long-term in OneDrive
+  (`OneDrive - purdue.edu/Grad School/Project Code/snopt7.7/snopt7/`) with
+  a local build copy at `~/snopt7`. See "macOS setup" above for the full
+  list of gotchas hit getting here.
+- `Plotting/Plotting.m` (MATLAB) — the live OneDrive copy the user actually
+  runs has been repointed at the local Mac repo path and works correctly
+  (see "macOS setup" above). The repo's own tracked `Plotting` symlink is a
+  separate, still-open item: it still points at the old WSL UNC path
+  (`\\wsl.localhost\Ubuntu-22.04\...`), still broken on macOS, and the user
+  explicitly deferred fixing it. Don't assume it's resolved just because
+  the OneDrive copy is.
 - `.claude/settings.local.json` should be gitignored (personal/local
   permission allowlist, not meant to be shared) — check `.gitignore` still
   has this if it's ever missing.
@@ -161,3 +233,12 @@ often the actual fix.
 - `docs/architecture/_rendered/*.svg` can drift stale relative to the
   `.puml` sources they're rendered from — check freshness before trusting
   a diagram for anything load-bearing (also called out in the README).
+- **`generate_data.py`/`plot_traj.py` need `pyoptsparse` importable even
+  though neither ever calls SNOPT.** `src/utils/io.py` and
+  `src/optimization/trajectory_optimization_problem.py` both import
+  `pyoptsparse` at module load time rather than lazily inside the
+  functions that actually use it. Discovered on the Mac while trying to
+  validate the README's "replay/plot without re-solving" claim before
+  `pyoptsparse` was built — it fails at import, not at any SNOPT call.
+  README now notes this caveat. A lazy-import fix is possible but hasn't
+  been made — the user's call, not done as part of this session.
