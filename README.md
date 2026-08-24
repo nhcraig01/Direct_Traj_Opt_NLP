@@ -13,15 +13,13 @@ under uncertainty:
   Extended Kalman Filter state estimate, with range / range-rate / angles
   ground measurements and trajectory-correction maneuvers.
 
-Solutions are validated with a Monte Carlo trial engine (per-trial EKF for
-the estimated-state case), and every stage is built in JAX (`jax.jacfwd`
-throughout for sensitivities, `diffrax` for propagation), so the whole
-pipeline is differentiable and runs equally well with or without a GPU.
+Solutions are validated through Monte-Carlo trials (per-trial EKF for
+the estimated-state case) with simple plotting utilities provided.
 
 ## Prerequisites
 
 - **Python ≥ 3.10.** macOS's system Python (`/usr/bin/python3`) is
-  typically 3.9 and too old — install a real one via Homebrew (see
+  typically 3.9 and too old — install via Homebrew (see
   [Install](#install) below) rather than trying to use the system one.
 - **macOS only: [Homebrew](https://brew.sh) and Xcode Command Line Tools**
   (`xcode-select --install`; often already present, or installed
@@ -41,7 +39,7 @@ pipeline is differentiable and runs equally well with or without a GPU.
 Everything, including the solver, builds into one `.venv` — there's no
 separate environment for SNOPT/`pyoptsparse`.
 
-**macOS**: get a real Python first, as a versioned formula rather than the
+**macOS**: Install python through homebrew as a versioned formula rather than the
 generic `python3` one so it doesn't fight with anything else on `PATH`:
 
 ```bash
@@ -64,8 +62,7 @@ codebase, but not enough to actually run SNOPT yet.
 
 `pyoptsparse` is intentionally **not** in `pyproject.toml`'s dependency
 list: `pip install pyoptsparse` from PyPI builds a version with no SNOPT
-bindings, which "succeeds" while leaving the solver completely
-non-functional. It has to be built for real, against your licensed SNOPT,
+bindings. This has to be done manually against your licensed SNOPT
 into this same `.venv`, per the section below.
 
 ### SNOPT / pyoptsparse setup
@@ -76,18 +73,13 @@ native Linux, and on macOS with Homebrew in place of apt. Do this after
 
 1. **Get SNOPT.** Obtain a licensed SNOPT7 source distribution (e.g. through
    your institution) and place it somewhere accessible, e.g. `~/snopt7`
-   (matches the `-s` path used below). If it starts out inside a
-   cloud-synced folder (OneDrive, Dropbox, etc.), copy it to a local,
-   non-synced path first — a compile writes lots of intermediate files, and
-   cloud sync underneath an in-progress build can cause flaky failures or
-   very slow I/O (especially "files on demand" placeholder downloads).
+   (matches the `-s` path used below).
 2. **Install system build dependencies:**
    ```bash
    sudo apt install swig libblas-dev liblapack-dev   # macOS: brew install swig openblas lapack gcc
    ```
    The `gcc` formula is required on macOS specifically for `gfortran` —
-   SNOPT's source is Fortran 77, and Apple's Clang toolchain has no Fortran
-   compiler; Homebrew has no standalone `gfortran` formula, it ships
+   SNOPT's source is Fortran 77; Homebrew has no standalone `gfortran` formula, it ships
    bundled inside `gcc`. Verify with `gfortran --version` afterward.
 
    Also on macOS: `openblas`/`lapack` install "keg-only" (not symlinked
@@ -110,22 +102,6 @@ native Linux, and on macOS with Homebrew in place of apt. Do this after
    `main`, so the build is reproducible — the clone itself is scratch,
    nothing from it needs to stay around afterward.
 
-   The `-d`/`--no-delete` flag is a required workaround, not optional: as
-   of `v2.0.13`, `install_mumps_from_src()` has a bug where the freshly
-   cloned MUMPS source directory gets garbage-collected (and deleted) by
-   Python before it's used — unlike the METIS/IPOPT steps right next to
-   it, it never keeps a reference to `git_clone()`'s return value (a
-   self-deleting `tempfile.TemporaryDirectory`). Without `-d` this fails
-   partway through with
-   `FileNotFoundError: [Errno 2] No such file or directory: './get.Mumps'`.
-   `-d` switches to a temp-dir mechanism that isn't auto-deleted,
-   sidestepping the bug — check whether it's still needed on whatever
-   version you install (may be fixed upstream by the time you read this).
-   If used, it also means build directories under `$TMPDIR`/`/tmp` won't
-   be auto-cleaned afterward — `build_pyoptsparse` prints each one's path
-   as it goes ("Remember to delete ... afterwards"); safe to delete once
-   the build finishes successfully.
-
    `build_pyoptsparse` will print an environment-variable command near the
    end — `DYLD_LIBRARY_PATH` on macOS, `LD_LIBRARY_PATH` on Linux —
    pointing the dynamic linker at libraries built alongside SNOPT
@@ -146,9 +122,9 @@ native Linux, and on macOS with Homebrew in place of apt. Do this after
 ## Repo layout
 
 ```
-Scenarios/<scenario>.yaml     # Input configs, one file per scenario (see below)
+Scenarios/<scenario>.yaml     # Input configs, one file per transfer scenario (see below)
 data/EarthMoon_System/        # System constants + precomputed periodic-orbit families
-Results/<scenario>/<case>/    # Outputs: sol.h5 + case.yaml are committed (tiny); data.h5/Sys.mat/*.png are gitignored (regenerable, can run into the GB range)
+Results/<scenario>/<case>/    # Outputs: sol.h5 + case.yaml are committed (tiny); data.h5/Sys.mat/*.png are gitignored
 src/
   problem/       ProblemDefinition, Toggles, OptimizationVariable, the case.yaml manifest
   dynamics/      CR3BP equations of motion, the diffrax-based propagator + sensitivities
@@ -156,7 +132,7 @@ src/
   optimization/  TrajectoryOptimizationProblem (Deterministic/Stochastic), constraints, initial-guess construction
   postprocess/   Detailed-trajectory replay + Monte Carlo orchestration, matplotlib quick-look plots
   utils/         Generic math helpers, all file I/O (config/solution/results HDF5 schema)
-dir_traj_opt.py   # Entry point 1: solve
+dir_traj_opt.py   # Entry point 1: solve (can do all three)
 generate_data.py  # Entry point 2: generate detailed trajectory + Monte Carlo data
 plot_traj.py      # Entry point 3: plot
 ```
@@ -178,7 +154,7 @@ config block at the top you edit directly (no CLI flags):
    automatically to the right runner based on the case's feedback type), and
    writes `data.h5` + `Sys.mat`.
 3. **`plot_traj.py`** — reads a case directory's `data.h5` and produces two
-   quick-look matplotlib figures: a 3D trajectory + control profile
+   simple figures: a 3D trajectory + control profile
    (always), and a Monte Carlo true-state deviation history with 3σ
    envelope (stochastic cases only).
 
@@ -191,7 +167,7 @@ This doesn't mean `pyoptsparse` is skippable, though: `src/utils/io.py` and
 `src/optimization/trajectory_optimization_problem.py` both import it at
 module load time regardless of whether SNOPT is actually invoked, so steps
 2–3 still need the full [SNOPT / pyoptsparse setup](#snopt--pyoptsparse-setup)
-done first, even if you never plan to solve anything yourself.
+done first, even if you never plan to solve anything yourself (could be a work around here).
 
 ## Scenario config format
 

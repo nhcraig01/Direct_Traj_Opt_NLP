@@ -7,6 +7,7 @@ Lib. The results-data schema and its save/load land here alongside these.
 """
 
 import os
+import re
 
 import h5py
 import numpy as np
@@ -68,6 +69,41 @@ def process_sparsity(grad_nonsparse):
                 new_obj_constr.pop(key2, None)
         grad_sparse[key] = new_obj_constr
     return grad_sparse
+
+
+# --------------------------------------------------------------------------- #
+# SNOPT solve statistics
+# --------------------------------------------------------------------------- #
+
+# Label (as it appears in the file) -> (output dict key, caster). SNOPT's own
+# self-reported counts/timings, not pyoptsparse's separate Python-side call
+# counter (sol.userObjCalls) - these come straight from SNOPT's fixed-format
+# summary block, present verbatim in both SNOPT_print.out and the
+# much-shorter SNOPT_summary.out.
+_SNOPT_STAT_LABELS = {
+    'No. of iterations': ('minor_iterations', int),
+    'No. of major iterations': ('major_iterations', int),
+    'User function calls (total)': ('user_func_calls', int),
+    'Time for solving problem': ('solve_time_s', float),
+    'Time for constraint functions': ('constraint_func_time_s', float),
+    'Time for objective function': ('objective_func_time_s', float),
+}
+
+
+def parse_snopt_stats(path='SNOPT_summary.out') -> dict:
+    """Pull iteration/call/timing stats out of SNOPT's summary block. Each
+    label's line also has a second, unrelated label:value pair sharing the
+    line (fixed-width columns), so match on the label prefix and take the
+    first number after it."""
+    with open(path, 'r') as f:
+        text = f.read()
+
+    stats = {}
+    for label, (key, cast) in _SNOPT_STAT_LABELS.items():
+        m = re.search(re.escape(label) + r'\s+([\d.]+)', text)
+        if m:
+            stats[key] = cast(m.group(1))
+    return stats
 
 
 # --------------------------------------------------------------------------- #

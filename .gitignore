@@ -19,6 +19,9 @@ SNOPT_print.out
 SNOPT_summary.out
 *.out
 
+# profile_traj_opt.py output - regenerable JAX/XLA traces
+profile_traces/
+
 # MATLAB scratch
 *.asv
 

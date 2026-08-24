@@ -109,14 +109,35 @@ def adaptive_mesh_con_terms(t_node_bound, dt_min=1e-5, dt_max=1e6):
 # Control Functions (Regularization)
 # --------------------------------------------------------------------------- #
 
-def U_reg_to_U(U_reg):
+def U_reg_to_U_cart(U_reg):
     """Convert regularized control to cartesian through non-linear transform"""
-    u, w, s = U_reg[0], U_reg[1], U_reg[2]
+    reg_x, reg_y, reg_z = U_reg[0], U_reg[1], U_reg[2]
 
-    U_x = u**2 - w**2 - s**2
-    U_y = 2 * u * w
-    U_z = 2 * u * s
+    U_x = reg_x**2 - reg_y**2 - reg_z**2
+    U_y = 2 * reg_x * reg_y
+    U_z = 2 * reg_x * reg_z
     U_cart = jnp.array([U_x, U_y, U_z])
     return U_cart
 
-U_reg_to_U_vmap = jax.vmap(U_reg_to_U, in_axes=(0,))
+U_reg_to_U_cart_vmap = jax.vmap(U_reg_to_U_cart, in_axes=(0,))
+
+def U_cart_to_U_reg(U_cart):
+    """Convert cartesian control to regularized through non-linear transform.
+    Singular where U_cart points purely in -x (or is zero): reg_x -> 0 there and
+    reg_y/reg_z are genuinely undefined (a whole circle of solutions maps to the
+    same U_cart) - falls back to the zero vector rather than dividing by ~0.
+    jnp.where (not Python if/elif) so this is safe under vmap/grad; the safe
+    denominator avoids a real 0/0 in the graph, which would otherwise poison
+    gradients through the masked-out branch too."""
+    U_x, U_y, U_z = U_cart[0], U_cart[1], U_cart[2]
+    U_cart_norm = jnp.sqrt(U_x**2 + U_y**2 + U_z**2)
+
+    reg_x = jnp.sqrt(jnp.maximum(U_x + U_cart_norm, 0.0) / 2)
+    safe_reg_x = jnp.where(reg_x > 0, reg_x, 1.0)
+    reg_y = jnp.where(reg_x > 0, U_y / (2 * safe_reg_x), 0.0)
+    reg_z = jnp.where(reg_x > 0, U_z / (2 * safe_reg_x), 0.0)
+
+    U_reg = jnp.array([reg_x, reg_y, reg_z])
+    return U_reg
+
+U_cart_to_U_reg_vmap = jax.vmap(U_cart_to_U_reg, in_axes=(0,))

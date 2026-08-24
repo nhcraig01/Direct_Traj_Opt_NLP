@@ -10,4 +10,4 @@ class OptimizationVariable(NamedTuple):
     lower: Array
     upper: Array
     value: Array  # default/fallback initial guess
-    guess_fn: Callable[[Array], Array] | None = None  # PRNGKey -> random initial guess; None = no random policy, use `value`
+    guess_fn: Callable[[Array, dict], Array] | None = None  # (PRNGKey, prior guesses) -> random initial guess; None = use `value`

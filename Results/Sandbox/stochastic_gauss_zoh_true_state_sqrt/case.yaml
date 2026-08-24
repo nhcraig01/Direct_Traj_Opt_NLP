@@ -1,0 +1,16 @@
+scenario: Sandbox
+problem_type: stochastic_gauss_zoh
+control_representation: cartesian
+feedback_control_type: true_state_sqrt
+measurements:
+- range
+- range-rate
+- angles
+gain_param_type: fulltraj_lqr
+adaptive_mesh_type: fixed
+alpha_rng:
+- 0.0
+- 0.1
+beta_rng:
+- 0.0
+- 0.1

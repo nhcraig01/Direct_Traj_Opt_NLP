@@ -1,36 +1,35 @@
 ---
 # Reference/template scenario - every field is explained inline below. The
-# other Scenarios/*.yaml files use this same schema without comments; use
-# this file as the field-by-field reference when writing a new scenario.
+# other Scenarios/*.yaml files use this same schema without comments.
 
-name: "L1 Lyapunov Orbit to L2 NRHO w/ Flybys"
+name: "Sandbox Testing"
 description: "IDK whaever... this is just random testing, go see the other scenarios for real stuff"
 
 dynamics: # Dynamics model + where its system constants come from
-  type: "CR3BP"                                    # Only CR3BP is implemented
+  type: "CR3BP"                                    # Only CR3BP is implemented, currently allows for any time autonomous system
   sys_param_file: 'data/EarthMoon_System/EMSys.yaml'  # mu, length/time/velocity/accel scales (Ls/Ts/Vs/As), primary body radii/positions
 
-integration: # diffrax adaptive step-controller tolerances (Dopri8 solver)
+integration: # diffrax integrator adaptive step-controller tolerances (Dopri8 solver)
   a_tol: 1.e-12   # absolute tolerance
   r_tol: 1.e-12   # relative tolerance
 
 traj_parameters:
-  control_arcs: 40        # N_arcs - number of shooting/control arcs the transfer is divided into
-  sub_arcs: 1              # N_subarcs - covariance-propagation sub-steps per arc (estimated_state EKF measurement-update cadence)
+  control_arcs: 40        # N_arcs - number of control arcs the transfer is divided into
+  sub_arcs: 1              # N_subarcs - number of sub-arcs (per control arc). Primarily used for more detailed covariance propagation within the optimization
   save_pts_detailed: 21    # N_save - detailed-resolution points saved per sub-arc when generate_data.py replays the solution
   MC_trials: 1000          # N_trials - number of Monte Carlo trials generate_data.py runs for stochastic cases
 
 boundary_conditions:
-  t0: "2026-01-01T00:00:00"   # Initial epoch (ISO 8601) - used only to compute elapsed transfer time, not absolute ephemeris
+  t0: "2026-01-01T00:00:00"   # Initial epoch (ISO 8601) - used only to compute elapsed transfer time, not absolute ephemeris (could be used for time non-autonomous sytems in the future)
   tf: "2026-01-21T00:00:00"   # Final epoch - (tf - t0) sets the total nondimensional transfer time
-  tf_T: 0.5                    # Post-insertion "safety coast" duration, in days, propagated with zero control past the final node
+  tf_T: 1.0                    # Post-insertion "safety coast" duration, in days, propagated with zero control past the final node
   initial_orbit:                       # Departure orbit, pulled from a precomputed periodic-orbit family file
-    family_path: 'data/EarthMoon_System/L1_Lyap.h5'  # HDF5 family file (X_hst/t_hst/JCs/STMs/BrkVals) - see data/EarthMoon_System/
-    Orb_ID: 100                                       # Index into the family selecting a specific periodic orbit
+    family_path: 'data/EarthMoon_System/L2_S_Halo.h5'  # HDF5 family file (X_hst/t_hst/JCs/STMs/BrkVals) - see data/EarthMoon_System/
+    Orb_ID: 270                                       # Index into the family selecting a specific periodic orbit
     Start_Idx: 0                                       # Index into that orbit's saved states selecting the phasing start point
   final_orbit:                          # Arrival orbit - same schema as initial_orbit
-    family_path: 'data/EarthMoon_System/L2_S_Halo.h5'
-    Orb_ID: 300
+    family_path: 'data/EarthMoon_System/L1_Lyap.h5'
+    Orb_ID: 60
     Start_Idx: 0
 
 engine: # Spacecraft mass/thrust properties (nondimensionalized internally)
@@ -40,7 +39,7 @@ engine: # Spacecraft mass/thrust properties (nondimensionalized internally)
 
 uncertainty:
   covariance:
-    initial_dispersion: # Phat_0 - true-state dispersion covariance at t0 (1-sigma values)
+    initial_dispersion: # True-state dispersion covariance at t0 (1-sigma values). P_0 if true_state, Phat_0 if estimated_state
       pos_sig: 10        # Position 1-sigma [km]
       vel_sig: .001       # Velocity 1-sigma [km/s]
       mass_sig: 1.e-12    # Mass 1-sigma [kg] (~0: mass isn't actually dispersed)

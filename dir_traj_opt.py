@@ -10,7 +10,6 @@
 
 import os
 import sys
-import time
 
 # Ensure the repo root (this script's directory) is on sys.path and is the cwd
 # so scenario yamls resolve their data/... paths and Results/... outputs land
@@ -27,7 +26,7 @@ jax.config.update('jax_platform_name', 'cpu')
 
 from pyoptsparse.pySNOPT.pySNOPT import SNOPT
 
-from src.utils.io import yaml_load, save_solution
+from src.utils.io import yaml_load, save_solution, parse_snopt_stats
 from src.problem.case_manifest import write_case_yaml
 from src.optimization.init_guess import hot_start_init_guess, random_init_guess
 from src.problem.problem_definition import Toggles, build_problem_def
@@ -46,10 +45,10 @@ if __name__ == "__main__":
     Problem_Type = "deterministic"
 
     # Control Representation (stoch must be cart rn):  cartesian | regularized
-    Control_Representation = "regularized"
+    Control_Representation = "cartesian"
 
     # Adaptive Mesh:  fixed | adaptive_fixedtof
-    Adaptive_Mesh_Type = "adaptive_fixedtof"
+    Adaptive_Mesh_Type = "fixed"
 
     # Gain Parameterization (stochastic only):  arc_lqr | fulltraj_lqr
     Gain_Parametrization_Type = "fulltraj_lqr"
@@ -63,19 +62,15 @@ if __name__ == "__main__":
     # Measurement Types (estimated_state only):  range | range-rate | angles
     Measurements = ("range", "range-rate", "angles")
 
-    # alpha/beta phasing variable ranges - (a, a) pins alpha to a (fixed
-    # phasing); widen e.g. to (0.0, 1.0) to let the optimizer pick a phase along
-    # the whole orbit. Collision avoidance is toggled via the scenario yaml's
-    # constraints.col_avoid block, not here.
+    # Departure/Arrival orbit phasing ranges
     Alpha_Rng = (0.0, 1.0)
     Beta_Rng = (0.0, 1.0)
 
     # Hot Start: a CASE name to warm-start from (reads Results/<scenario>/<case>/
-    # sol.h5), or None. Variable shapes must match this run's exactly (node
-    # resampling isn't ported).
-    Hot_Start_Case = None
+    # sol.h5), or None.
+    Hot_Start_Case = "deterministic"
 
-    SEED = 2
+    SEED = 10
 
     # Chain generate_data.py after solving to also produce data.h5 for plotting.
     Generate_Data = True
@@ -103,7 +98,7 @@ if __name__ == "__main__":
                   'Function precision': 1e-10,
                   'Verify level': -1,
                   'Nonderivative linesearch': 1,
-                  'Major step limit': 1e0 if hot_start_file is None else 1e-3,
+                  'Major step limit': 1e0 if hot_start_file is None else 1e-2,
                   'Elastic weight': 1.e4}
     # ---------------------------------------------------------------------------
 
@@ -145,11 +140,19 @@ if __name__ == "__main__":
     optprob, sens = top.to_pyoptsparse(init_guess)
 
     # Solve ---------------------------------------------------------------------
-    print('SNOPT Starting')
-    start_time = time.time()
+    print("SNOPT Starting")
     sol = SNOPT(options=optOptions)(optprob, sens=sens, timeLimit=None)
-    print('SNOPT Finished: %s' % (sol.optInform['text']))
-    print("Elapsed Time: %.3f" % (time.time() - start_time))
+    print("SNOPT Finished: %s" % (sol.optInform['text']))
+
+    snopt_stats = parse_snopt_stats()
+    print("\nSolve Time: %.3f s" % snopt_stats['solve_time_s'])
+    print("Major Iterations: %d" % snopt_stats['major_iterations'])
+    print("Minor Iterations: %d" % snopt_stats['minor_iterations'])
+    print("User Function Calls: %d" % snopt_stats['user_func_calls'])
+    print("Constraint Function Time: %.3f s" % snopt_stats['constraint_func_time_s'])
+    print("Objective Function Time: %.3f s" % snopt_stats['objective_func_time_s'])
+    print("Avg Time per Function Call: %.4f s" %
+          (snopt_stats['constraint_func_time_s'] / snopt_stats['user_func_calls']))
 
     # Save the solution + its case manifest -------------------------------------
     t_node_bound = (sol.xStar['t_node_bound'] if Adaptive_Mesh_Type.lower() == 'adaptive_fixedtof'

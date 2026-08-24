@@ -52,7 +52,8 @@ class LQRArcGains(GainParameterization):
             OptimizationVariable(
                 name='gain_weights', size=size,
                 lower=jnp.full(size, 1e-6), upper=jnp.full(size, jnp.inf),
-                value=default_value, guess_fn=lambda key: default_value,
+                value=default_value, 
+                guess_fn=lambda key, prior: default_value,
             ),
         ]
 
@@ -106,7 +107,8 @@ class LQRFullTrajGains(GainParameterization):
             OptimizationVariable(
                 name='gain_weights', size=size,
                 lower=jnp.full(size, 1e-6), upper=jnp.full(size, jnp.inf),
-                value=default_value, guess_fn=lambda key: default_value,
+                value=default_value, 
+                guess_fn=lambda key, prior: default_value,
             ),
         ]
 

@@ -21,7 +21,7 @@ import jax.numpy as jnp
 
 from src.stochastic.control_noise import gates2Gexe
 from src.stochastic.error_propagator import TrueStateCovPropagator, EstimatedStateCovPropagator
-from src.utils.math_utils import cart2sph_vmap, mat_lmax, U_reg_to_U_vmap
+from src.utils.math_utils import cart2sph_vmap, mat_lmax, U_reg_to_U_cart_vmap
 
 
 def _orbit_history(prop, X, t_hst):
@@ -54,7 +54,7 @@ def generate_detailed_data(problem_def, top, xStar):
     X0, Xf = xStar['X0'], xStar['Xf']
     if regularized:
         U_reg_arc_hst = xStar['U_reg_arc_hst'].reshape(N_arcs, m)
-        U_arc_hst = U_reg_to_U_vmap(U_reg_arc_hst)
+        U_arc_hst = U_reg_to_U_cart_vmap(U_reg_arc_hst)
     else:
         U_arc_hst = xStar['U_arc_hst'].reshape(N_arcs, m)
     if problem_def.toggles.adaptive_mesh_type.lower() == 'adaptive_fixedtof':

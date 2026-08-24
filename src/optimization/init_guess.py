@@ -2,9 +2,12 @@
 TrajectoryOptimizationProblem subclass.
 
 Each OptimizationVariable carries its own random-guess policy as `guess_fn`
-(PRNGKey -> Array), defined alongside the variable itself in variables() -
-adding a new variable never requires touching this module. Variables with
-`guess_fn is None` simply keep variables()'s default `value`. The resulting
+((PRNGKey, prior-guesses dict) -> Array), defined alongside the variable itself
+in variables() - adding a new variable never requires touching this module.
+Variables with `guess_fn is None` simply keep variables()'s default `value`.
+guess_fn may read an earlier variable's already-resolved guess out of the
+second arg (e.g. X0 derived from alpha) - only earlier ones, since the dict
+fills in list order, so variables() must order accordingly. The resulting
 override dicts are consumed by to_pyoptsparse(init_guess) via
 init_guess.get(v.name, v.value), so hot-starting a stochastic problem from a
 deterministic solution (or vice versa) is just a matter of which override
@@ -20,13 +23,14 @@ from src.problem.data_structures import OptimizationVariable
 
 
 def random_init_guess(variables: list[OptimizationVariable], key: Array) -> dict[str, Array]:
-    """Apply each variable's `guess_fn` (if any) to its own split of `key`."""
+    """Apply each variable's `guess_fn` (if any) to its own split of `key`, plus
+    the guesses resolved so far (for cross-variable dependencies)."""
     keys = jax.random.split(key, len(variables))
 
     init_guess = {}
     for v, k in zip(variables, keys):
         if v.guess_fn is not None:
-            init_guess[v.name] = v.guess_fn(k)
+            init_guess[v.name] = v.guess_fn(k, init_guess)
 
     return init_guess
 

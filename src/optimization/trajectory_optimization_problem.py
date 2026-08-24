@@ -25,7 +25,7 @@ from src.stochastic.error_propagator import (
 )
 from src.stochastic.gain_parameterization import LQRArcGains, LQRFullTrajGains
 from src.utils.io import process_sparsity
-from src.utils.math_utils import U_reg_to_U_vmap
+from src.utils.math_utils import U_reg_to_U_cart_vmap, U_cart_to_U_reg_vmap
 
 
 class TrajectoryOptimizationProblem:
@@ -125,16 +125,26 @@ class DeterministicTOP(TrajectoryOptimizationProblem):
             OptimizationVariable(
                 name='U_arc_hst', size=U_size,
                 lower=-jnp.ones(U_size), upper=jnp.ones(U_size), value=jnp.zeros(U_size),
-                guess_fn=lambda key: jnp.sqrt(1e0) * jax.random.normal(key, shape=(U_size,)),
+                guess_fn=lambda key, prior: jnp.sqrt(1e-1) * jax.random.normal(key, shape=(U_size,)),
+            ),
+            OptimizationVariable(
+                name='alpha', size=1,
+                lower=jnp.asarray(bc.alpha_min), upper=jnp.asarray(bc.alpha_max), value=jnp.asarray(bc.alpha_min),
+                guess_fn=lambda key, prior: jax.random.uniform(key, minval=bc.alpha_min, maxval=bc.alpha_max),
+            ),
+            OptimizationVariable(
+                name='beta', size=1,
+                lower=jnp.asarray(bc.beta_min), upper=jnp.asarray(bc.beta_max), value=jnp.asarray(bc.beta_min),
+                guess_fn=lambda key, prior: jax.random.uniform(key, minval=bc.beta_min, maxval=bc.beta_max),
             ),
             OptimizationVariable(
                 name='X0', size=dims.state_dim,
                 lower=jnp.array([-10., -10., -10., -10., -10., -10., 1e-1]),
                 upper=jnp.array([10., 10., 10., 10., 10., 10., 1.]),
                 value=jnp.concatenate([bc.X0_init, jnp.array([1.0])]),
-                guess_fn=lambda key: jnp.concatenate([
-                    bc.X0_interp.evaluate(jax.random.uniform(key, minval=bc.alpha_min, maxval=bc.alpha_max)),
-                    jnp.array([1.0]),
+                # derived from alpha's already-resolved guess, not its own draw
+                guess_fn=lambda key, prior: jnp.concatenate([
+                    bc.X0_interp.evaluate(prior['alpha']), jnp.array([1.0]),
                 ]),
             ),
             OptimizationVariable(
@@ -142,20 +152,9 @@ class DeterministicTOP(TrajectoryOptimizationProblem):
                 lower=jnp.array([-10., -10., -10., -10., -10., -10., 1e-1]),
                 upper=jnp.array([10., 10., 10., 10., 10., 10., 1.]),
                 value=jnp.concatenate([bc.Xf_init, jnp.array([0.95])]),
-                guess_fn=lambda key: jnp.concatenate([
-                    bc.Xf_interp.evaluate(jax.random.uniform(key, minval=bc.beta_min, maxval=bc.beta_max)),
-                    jnp.array([0.95]),
+                guess_fn=lambda key, prior: jnp.concatenate([
+                    bc.Xf_interp.evaluate(prior['beta']), jnp.array([0.95]),
                 ]),
-            ),
-            OptimizationVariable(
-                name='alpha', size=1,
-                lower=jnp.asarray(bc.alpha_min), upper=jnp.asarray(bc.alpha_max), value=jnp.asarray(bc.alpha_min),
-                guess_fn=lambda key: jax.random.uniform(key, minval=bc.alpha_min, maxval=bc.alpha_max),
-            ),
-            OptimizationVariable(
-                name='beta', size=1,
-                lower=jnp.asarray(bc.beta_min), upper=jnp.asarray(bc.beta_max), value=jnp.asarray(bc.beta_min),
-                guess_fn=lambda key: jax.random.uniform(key, minval=bc.beta_min, maxval=bc.beta_max),
             ),
         ]
 
@@ -163,7 +162,7 @@ class DeterministicTOP(TrajectoryOptimizationProblem):
             variables_list.append(OptimizationVariable(
                 name='t_node_bound', size=dims.N_nodes,
                 lower=jnp.zeros(dims.N_nodes), upper=jnp.full(dims.N_nodes, bc.t_node_bound[-1]),
-                value=bc.t_node_bound, guess_fn=lambda key: bc.t_node_bound,
+                value=bc.t_node_bound, guess_fn=lambda key, prior: bc.t_node_bound,
             ))
 
         return variables_list
@@ -224,17 +223,31 @@ class DeterministicTOPReg(TrajectoryOptimizationProblem):
         variables_list = [
             OptimizationVariable(
                 name='U_reg_arc_hst', size=U_size,
-                lower=-jnp.ones(U_size), upper=jnp.ones(U_size), value=jnp.zeros(U_size),
-                guess_fn=lambda key: jnp.sqrt(1e0) * jax.random.normal(key, shape=(U_size,)),
+                lower=-jnp.ones(U_size), upper=jnp.ones(U_size),
+                value=jnp.zeros(U_size),
+                guess_fn=lambda key, prior: U_cart_to_U_reg_vmap(
+                    (jnp.sqrt(1e-1) * jax.random.normal(key, shape=(U_size,))).reshape(dims.N_arcs, dims.control_dim)
+                ).flatten(),
+            ),
+            OptimizationVariable(
+                name='alpha', size=1,
+                lower=jnp.asarray(bc.alpha_min), upper=jnp.asarray(bc.alpha_max),
+                value=jnp.asarray(bc.alpha_min),
+                guess_fn=lambda key, prior: jax.random.uniform(key, minval=bc.alpha_min, maxval=bc.alpha_max),
+            ),
+            OptimizationVariable(
+                name='beta', size=1,
+                lower=jnp.asarray(bc.beta_min), upper=jnp.asarray(bc.beta_max),
+                value=jnp.asarray(bc.beta_min),
+                guess_fn=lambda key, prior: jax.random.uniform(key, minval=bc.beta_min, maxval=bc.beta_max),
             ),
             OptimizationVariable(
                 name='X0', size=dims.state_dim,
                 lower=jnp.array([-10., -10., -10., -10., -10., -10., 1e-1]),
                 upper=jnp.array([10., 10., 10., 10., 10., 10., 1.]),
                 value=jnp.concatenate([bc.X0_init, jnp.array([1.0])]),
-                guess_fn=lambda key: jnp.concatenate([
-                    bc.X0_interp.evaluate(jax.random.uniform(key, minval=bc.alpha_min, maxval=bc.alpha_max)),
-                    jnp.array([1.0]),
+                guess_fn=lambda key, prior: jnp.concatenate([
+                    bc.X0_interp.evaluate(prior['alpha']), jnp.array([1.0]),
                 ]),
             ),
             OptimizationVariable(
@@ -242,20 +255,9 @@ class DeterministicTOPReg(TrajectoryOptimizationProblem):
                 lower=jnp.array([-10., -10., -10., -10., -10., -10., 1e-1]),
                 upper=jnp.array([10., 10., 10., 10., 10., 10., 1.]),
                 value=jnp.concatenate([bc.Xf_init, jnp.array([0.95])]),
-                guess_fn=lambda key: jnp.concatenate([
-                    bc.Xf_interp.evaluate(jax.random.uniform(key, minval=bc.beta_min, maxval=bc.beta_max)),
-                    jnp.array([0.95]),
+                guess_fn=lambda key, prior: jnp.concatenate([
+                    bc.Xf_interp.evaluate(prior['beta']), jnp.array([0.95]),
                 ]),
-            ),
-            OptimizationVariable(
-                name='alpha', size=1,
-                lower=jnp.asarray(bc.alpha_min), upper=jnp.asarray(bc.alpha_max), value=jnp.asarray(bc.alpha_min),
-                guess_fn=lambda key: jax.random.uniform(key, minval=bc.alpha_min, maxval=bc.alpha_max),
-            ),
-            OptimizationVariable(
-                name='beta', size=1,
-                lower=jnp.asarray(bc.beta_min), upper=jnp.asarray(bc.beta_max), value=jnp.asarray(bc.beta_min),
-                guess_fn=lambda key: jax.random.uniform(key, minval=bc.beta_min, maxval=bc.beta_max),
             ),
         ]
 
@@ -263,7 +265,7 @@ class DeterministicTOPReg(TrajectoryOptimizationProblem):
             variables_list.append(OptimizationVariable(
                 name='t_node_bound', size=dims.N_nodes,
                 lower=jnp.zeros(dims.N_nodes), upper=jnp.full(dims.N_nodes, bc.t_node_bound[-1]),
-                value=bc.t_node_bound, guess_fn=lambda key: bc.t_node_bound,
+                value=bc.t_node_bound, guess_fn=lambda key, prior: bc.t_node_bound,
             ))
 
         return variables_list
@@ -287,7 +289,7 @@ class DeterministicTOPReg(TrajectoryOptimizationProblem):
 
     def evaluate(self, inputs: dict) -> dict:
         dims = self._problem_def.dims
-        inputs['U_arc_hst'] = U_reg_to_U_vmap(inputs['U_reg_arc_hst'].reshape(dims.N_arcs, dims.control_dim)).flatten()
+        inputs['U_arc_hst'] = U_reg_to_U_cart_vmap(inputs['U_reg_arc_hst'].reshape(dims.N_arcs, dims.control_dim)).flatten()
         sol_data = self.propagate(dict(inputs))
 
         output = {'o': self.objective(sol_data)}
@@ -364,16 +366,29 @@ class StochasticTOP(TrajectoryOptimizationProblem):
             OptimizationVariable(
                 name='U_arc_hst', size=U_size,
                 lower=-jnp.ones(U_size), upper=jnp.ones(U_size), value=jnp.zeros(U_size),
-                guess_fn=lambda key: jnp.sqrt(1e0) * jax.random.normal(key, shape=(U_size,)),
+                guess_fn=lambda key, prior: jnp.sqrt(1e0) * jax.random.normal(key, shape=(U_size,)),
+            ),
+            OptimizationVariable(
+                name='alpha', size=1,
+                lower=jnp.asarray(bc.alpha_min),
+                upper=jnp.asarray(bc.alpha_max),
+                value=jnp.asarray(bc.alpha_min),
+                guess_fn=lambda key, prior: jax.random.uniform(key, minval=bc.alpha_min, maxval=bc.alpha_max),
+            ),
+            OptimizationVariable(
+                name='beta', size=1,
+                lower=jnp.asarray(bc.beta_min),
+                upper=jnp.asarray(bc.beta_max),
+                value=jnp.asarray(bc.beta_min),
+                guess_fn=lambda key, prior: jax.random.uniform(key, minval=bc.beta_min, maxval=bc.beta_max),
             ),
             OptimizationVariable(
                 name='X0', size=dims.state_dim,
                 lower=jnp.array([-10., -10., -10., -10., -10., -10., 1e-1]),
                 upper=jnp.array([10., 10., 10., 10., 10., 10., 1.]),
                 value=jnp.concatenate([bc.X0_init, jnp.array([1.0])]),
-                guess_fn=lambda key: jnp.concatenate([
-                    bc.X0_interp.evaluate(jax.random.uniform(key, minval=bc.alpha_min, maxval=bc.alpha_max)),
-                    jnp.array([1.0]),
+                guess_fn=lambda key, prior: jnp.concatenate([
+                    bc.X0_interp.evaluate(prior['alpha']), jnp.array([1.0]),
                 ]),
             ),
             OptimizationVariable(
@@ -381,24 +396,9 @@ class StochasticTOP(TrajectoryOptimizationProblem):
                 lower=jnp.array([-10., -10., -10., -10., -10., -10., 1e-1]),
                 upper=jnp.array([10., 10., 10., 10., 10., 10., 1.]),
                 value=jnp.concatenate([bc.Xf_init, jnp.array([0.95])]),
-                guess_fn=lambda key: jnp.concatenate([
-                    bc.Xf_interp.evaluate(jax.random.uniform(key, minval=bc.beta_min, maxval=bc.beta_max)),
-                    jnp.array([0.95]),
+                guess_fn=lambda key, prior: jnp.concatenate([
+                    bc.Xf_interp.evaluate(prior['beta']), jnp.array([0.95]),
                 ]),
-            ),
-            OptimizationVariable(
-                name='alpha', size=1,
-                lower=jnp.asarray(bc.alpha_min), 
-                upper=jnp.asarray(bc.alpha_max), 
-                value=jnp.asarray(bc.alpha_min),
-                guess_fn=lambda key: jax.random.uniform(key, minval=bc.alpha_min, maxval=bc.alpha_max),
-            ),
-            OptimizationVariable(
-                name='beta', size=1,
-                lower=jnp.asarray(bc.beta_min), 
-                upper=jnp.asarray(bc.beta_max), 
-                value=jnp.asarray(bc.beta_min),
-                guess_fn=lambda key: jax.random.uniform(key, minval=bc.beta_min, maxval=bc.beta_max),
             ),
         ]
 
@@ -406,7 +406,7 @@ class StochasticTOP(TrajectoryOptimizationProblem):
             variables_list.append(OptimizationVariable(
                 name='t_node_bound', size=dims.N_nodes,
                 lower=jnp.zeros(dims.N_nodes), upper=jnp.full(dims.N_nodes, bc.t_node_bound[-1]),
-                value=bc.t_node_bound, guess_fn=lambda key: bc.t_node_bound,
+                value=bc.t_node_bound, guess_fn=lambda key, prior: bc.t_node_bound,
             ))
 
         variables_list += self._gain_param.variables()
