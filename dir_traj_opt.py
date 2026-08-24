@@ -45,7 +45,7 @@ if __name__ == "__main__":
     Problem_Type = "deterministic"
 
     # Control Representation (stoch must be cart rn):  cartesian | regularized
-    Control_Representation = "cartesian"
+    Control_Representation = "regularized"
 
     # Adaptive Mesh:  fixed | adaptive_fixedtof
     Adaptive_Mesh_Type = "fixed"
@@ -68,9 +68,9 @@ if __name__ == "__main__":
 
     # Hot Start: a CASE name to warm-start from (reads Results/<scenario>/<case>/
     # sol.h5), or None.
-    Hot_Start_Case = "deterministic"
+    Hot_Start_Case = None
 
-    SEED = 10
+    SEED = 1
 
     # Chain generate_data.py after solving to also produce data.h5 for plotting.
     Generate_Data = True

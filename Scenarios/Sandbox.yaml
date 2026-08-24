@@ -14,14 +14,14 @@ integration: # diffrax integrator adaptive step-controller tolerances (Dopri8 so
   r_tol: 1.e-12   # relative tolerance
 
 traj_parameters:
-  control_arcs: 40        # N_arcs - number of control arcs the transfer is divided into
+  control_arcs: 50        # N_arcs - number of control arcs the transfer is divided into
   sub_arcs: 1              # N_subarcs - number of sub-arcs (per control arc). Primarily used for more detailed covariance propagation within the optimization
   save_pts_detailed: 21    # N_save - detailed-resolution points saved per sub-arc when generate_data.py replays the solution
   MC_trials: 1000          # N_trials - number of Monte Carlo trials generate_data.py runs for stochastic cases
 
 boundary_conditions:
   t0: "2026-01-01T00:00:00"   # Initial epoch (ISO 8601) - used only to compute elapsed transfer time, not absolute ephemeris (could be used for time non-autonomous sytems in the future)
-  tf: "2026-01-21T00:00:00"   # Final epoch - (tf - t0) sets the total nondimensional transfer time
+  tf: "2026-01-31T00:00:00"   # Final epoch - (tf - t0) sets the total nondimensional transfer time
   tf_T: 1.0                    # Post-insertion "safety coast" duration, in days, propagated with zero control past the final node
   initial_orbit:                       # Departure orbit, pulled from a precomputed periodic-orbit family file
     family_path: 'data/EarthMoon_System/L2_S_Halo.h5'  # HDF5 family file (X_hst/t_hst/JCs/STMs/BrkVals) - see data/EarthMoon_System/
