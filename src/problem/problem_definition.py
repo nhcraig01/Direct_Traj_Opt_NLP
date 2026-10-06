@@ -121,7 +121,7 @@ class Toggles:
     and which branches TOP.variables()/objective()/evaluate() take."""
     problem_type: str = "deterministic"       # "deterministic" | "stochastic_gauss_zoh"
     control_representation: str = "cartesian"  # "cartesian" | "regularized"
-    feedback_control_type: str = "true_state"  # "true_state" | "estimated_state"
+    feedback_control_type: str = "true_state"  # "true_state" | "true_state_sqrt" | "estimated_state" | "estimated_state_sqrt"
     measurements: tuple = ()                   # e.g. ("range", "range-rate", "angles")
     gain_param_type: str = "fulltraj_lqr"      # "arc_lqr" | "fulltraj_lqr"
     adaptive_mesh_type: str = "fixed"          # "fixed" | "adaptive_fixedtof"
@@ -292,7 +292,7 @@ def build_problem_def(config: dict, toggles: Toggles) -> ProblemDefinition:
     _MEAS_DIMS = {'position': 3, 'pos': 3, 'range': 1, 'rng': 1,
                   'range-rate': 1, 'rng-rate': 1, 'rate': 1, 'angles': 2, 'ang': 2}
     meas_dim = 0
-    if toggles.feedback_control_type.lower() == 'estimated_state':
+    if toggles.feedback_control_type.lower() in ('estimated_state', 'estimated_state_sqrt'):
         meas_dim = sum(_MEAS_DIMS[m.lower()] for m in toggles.measurements)
 
     # Collision avoidance

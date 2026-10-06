@@ -7,7 +7,7 @@ optimizer xStar), this replays the nominal trajectory at *detailed* resolution
 propagates the state-error covariance (P for true_state, the 14x14 augmented
 Paug for estimated_state) along it, and derives the control-norm bounds, dV
 statistics and terminal target covariance. It reuses the same rework primitives
-the MC runners use - `Propagator._propagate_arc`/`_arc_dX0_vmap`, the gain
+the MC runners use - `Propagator._propagate_arc`/`_arc_dAB_vmap`, the gain
 parameterization, and the `ErrorPropagator` subarc cov/EKF steps - so there is
 no duplicated math, just detailed-resolution orchestration.
 
@@ -19,9 +19,10 @@ sim_Det_traj contract so parity can be checked directly.
 import jax
 import jax.numpy as jnp
 
+from src.dynamics.propagator import node_times
 from src.stochastic.control_noise import gates2Gexe
 from src.stochastic.error_propagator import TrueStateCovPropagator, EstimatedStateCovPropagator
-from src.utils.math_utils import cart2sph_vmap, mat_lmax, U_reg_to_U_cart_vmap
+from src.utils.math_utils import cart2sph_vmap
 
 
 def _orbit_history(prop, X, t_hst):
@@ -41,9 +42,8 @@ def generate_detailed_data(problem_def, top, xStar):
     post_len = dims.post_insert_length
     length = dims.length
 
-    regularized = problem_def.toggles.control_representation.lower() == 'regularized'
     stochastic = problem_def.toggles.problem_type.lower() == 'stochastic_gauss_zoh'
-    estimated = problem_def.toggles.feedback_control_type.lower() == 'estimated_state'
+    estimated = problem_def.toggles.feedback_control_type.lower() in ('estimated_state', 'estimated_state_sqrt')
 
     # Coerce to jax - xStar loaded from sol.h5 is numpy, and the gain fori_loop
     # indexes it with a traced loop variable (fine under the optimizer's jit,
@@ -52,15 +52,11 @@ def generate_detailed_data(problem_def, top, xStar):
 
     prop = top._propagator
     X0, Xf = xStar['X0'], xStar['Xf']
-    if regularized:
-        U_reg_arc_hst = xStar['U_reg_arc_hst'].reshape(N_arcs, m)
-        U_arc_hst = U_reg_to_U_cart_vmap(U_reg_arc_hst)
-    else:
-        U_arc_hst = xStar['U_arc_hst'].reshape(N_arcs, m)
-    if problem_def.toggles.adaptive_mesh_type.lower() == 'adaptive_fixedtof':
-        t_node = xStar['t_node_bound']
-    else:
-        t_node = bc.t_node_bound
+    # One control variable whatever the representation; the ControlRepresentation
+    # turns it into the physical cartesian command everything below consumes.
+    control_arc_hst = xStar['control_arc_hst'].reshape(N_arcs, m)
+    U_arc_hst = top._control_repr.to_cartesian(problem_def, control_arc_hst).reshape(N_arcs, m)
+    t_node = node_times(xStar['arc_length_hst'])
 
     # ----- Phase 1: detailed state + linearization per arc ----------------- #
     X_hst = jnp.zeros((length, n)).at[0].set(X0)
@@ -85,10 +81,12 @@ def generate_detailed_data(problem_def, top, xStar):
         X_node_hst = X_node_hst.at[k + 1].set(X_arc[-1])
 
         if stochastic:
-            A_arc_hst = A_arc_hst.at[k].set(prop._arc_dX0(X0_arc, U_arc, t_node[k], t_node[k + 1]))
-            B_arc_hst = B_arc_hst.at[k].set(prop._arc_dU(X0_arc, U_arc, t_node[k], t_node[k + 1]))
-            A_hst = A_hst.at[i0:i_f].set(prop._arc_dX0_vmap(X_arc[:-1], U_arc, t_arc[:-1], t_arc[1:]))
-            B_hst = B_hst.at[i0:i_f].set(prop._arc_dU_vmap(X_arc[:-1], U_arc, t_arc[:-1], t_arc[1:]))
+            A_arc, B_arc = prop._arc_dAB(X0_arc, U_arc, t_node[k], t_node[k + 1])
+            A_arc_hst = A_arc_hst.at[k].set(A_arc)
+            B_arc_hst = B_arc_hst.at[k].set(B_arc)
+            A_js, B_js = prop._arc_dAB_vmap(X_arc[:-1], U_arc, t_arc[:-1], t_arc[1:])
+            A_hst = A_hst.at[i0:i_f].set(A_js)
+            B_hst = B_hst.at[i0:i_f].set(B_js)
         X0_arc = X_arc[-1]
 
     # ----- Phase 1b: post-insertion coast (state + sensitivities) ---------- #
@@ -99,8 +97,9 @@ def generate_detailed_data(problem_def, top, xStar):
     X_hst = X_hst.at[pi0 + 1:].set(X_pi[1:])
     t_hst = t_hst.at[pi0 + 1:].set(t_pi[1:])
     if stochastic:
-        A_hst = A_hst.at[pi0:].set(prop._arc_dX0_vmap(X_pi[:-1], jnp.zeros(m), t_pi[:-1], t_pi[1:]))
-        B_hst = B_hst.at[pi0:].set(prop._arc_dU_vmap(X_pi[:-1], jnp.zeros(m), t_pi[:-1], t_pi[1:]))
+        A_pi, B_pi = prop._arc_dAB_vmap(X_pi[:-1], jnp.zeros(m), t_pi[:-1], t_pi[1:])
+        A_hst = A_hst.at[pi0:].set(A_pi)
+        B_hst = B_hst.at[pi0:].set(B_pi)
 
     # ----- orbit histories + dV_mean (always) ------------------------------ #
     orb0_X, orb0_t = _orbit_history(prop, X0, bc.Orb0_t_hst)
@@ -111,8 +110,12 @@ def generate_detailed_data(problem_def, top, xStar):
     Vs, U_acc = problem_def.Sys['Vs'], problem_def.spacecraft.U_Acc_min_nd
     dV_mean = jnp.sum(jnp.linalg.norm(U_hst[:-1], axis=1) * U_acc / X_hst[:-1, -1] * dt_hst) * Vs
 
+    # control_arc_hst is the raw optimization variable (regularized units when
+    # that representation is active); U_arc_hst/U_hst/U_hst_sph are the derived
+    # cartesian forms the MC runner and MATLAB plotting consume.
     det = {'X_hst': X_hst, 'X_node_hst': X_node_hst, 'U_hst': U_hst, 'U_hst_sph': U_hst_sph,
-           'U_arc_hst': U_arc_hst, 't_hst': t_hst, 't_node_hst': t_node, 'dV_mean': dV_mean,
+           'control_arc_hst': control_arc_hst, 'U_arc_hst': U_arc_hst,
+           't_hst': t_hst, 't_node_hst': t_node, 'dV_mean': dV_mean,
            'length_transfer': transfer_len, 'length_arc': arc_len}
     out = {'Name': problem_def.name, 'Orb0': {'X_hst': orb0_X, 't_hst': orb0_t},
            'Orbf': {'X_hst': orbf_X, 't_hst': orbf_t}, 'Det': det}
@@ -120,28 +123,37 @@ def generate_detailed_data(problem_def, top, xStar):
         return out
 
     # ----- Phase 2: gains ------------------------------------------------- #
-    gain_sol = top._gain_param.compute_gains(problem_def, {
-        'U_arc_hst': xStar['U_arc_hst'], 'gain_weights': xStar['gain_weights'],
+    # Mirrors StochasticTOP.evaluate()'s pipeline: Hq_arc_hst (identity for
+    # cartesian) is what makes compute_gains() representation-aware. U_arc_hst
+    # is carried too - the gain classes still compute a vestigial, unused
+    # control_norms from it.
+    gain_sol_data = {
+        'control_arc_hst': control_arc_hst, 'U_arc_hst': U_arc_hst,
+        'gain_weights': xStar['gain_weights'],
         'A_arc_hst': A_arc_hst, 'B_arc_hst': B_arc_hst,
-    })
+    }
+    gain_sol_data['Hq_arc_hst'] = top._control_repr.control_jacobian_hst(problem_def, gain_sol_data)
+    gain_sol = top._gain_param.compute_gains(problem_def, gain_sol_data)
     K_arc_hst = gain_sol['K_arc_hst']
+    Hq_arc_hst = gain_sol_data['Hq_arc_hst']
     gain_weights = xStar['gain_weights'].reshape(N_arcs, 2)
 
     # ----- Phase 3: covariance along the detailed trajectory --------------- #
     P_hst = jnp.zeros((length, n, n))
     K_hst = jnp.zeros((length - 1, m, n))
     gain_weights_hst = jnp.zeros((length, 2))
-    P_u_hst = jnp.zeros((length - 1, m, m))
-    TCM_norm_bound_hst = jnp.zeros((length,))
-    TCM_norm_dV_hst = jnp.zeros((length,))
-    U_norm_bound_hst = jnp.zeros((length,))
-    U_norm_dV_hst = jnp.zeros((length,))
+    P_control_hst = jnp.zeros((length - 1, m, m))
+    P_control_arc_hst = jnp.zeros((N_arcs, m, m))
     if estimated:
         Paug_hst = jnp.zeros((length, 2 * n, 2 * n))
         L_hst = jnp.zeros((length, n, top._error_propagator._meas.n_meas))
         H_hst = jnp.zeros((length, top._error_propagator._meas.n_meas, n))
         P_v_hst = jnp.zeros((length, top._error_propagator._meas.n_meas, top._error_propagator._meas.n_meas))
-        Paug_hst = Paug_hst.at[0].set(top._error_propagator.init_error_state(problem_def))
+        # Always the analytic EstimatedStateCovPropagator's init_error_state/
+        # subarc_ekf_step for this detailed replay, regardless of whether
+        # top._error_propagator is the sqrt variant (which doesn't return
+        # the same (2n,2n) Paug shape) - same reasoning as EstimatedStateMCRunner.
+        Paug_hst = Paug_hst.at[0].set(EstimatedStateCovPropagator(problem_def).init_error_state(problem_def))
         meas = top._error_propagator._meas
         ekf_step = EstimatedStateCovPropagator.subarc_ekf_step
     else:
@@ -150,27 +162,23 @@ def generate_detailed_data(problem_def, top, xStar):
 
     for k in range(N_arcs):
         i0, i_f = k * (arc_len - 1), (k + 1) * (arc_len - 1)
-        K_arc, U_arc = K_arc_hst[k], U_arc_hst[k]
+        K_arc, U_arc, Hq_arc = K_arc_hst[k], U_arc_hst[k], Hq_arc_hst[k]
         P_exe_arc, _ = gates2Gexe(U_arc, unc.gates)
         P_u_arc = unc.G_stoch + P_exe_arc
 
-        # control-dispersion covariance (Phat block for estimated) -> bounds
+        # Feedback-command covariance (Phat block for estimated). Collected
+        # per arc so the control-norm/dV bounds can be built from it after
+        # the loop, via whichever formulation the ControlRepresentation uses.
         if estimated:
             P0_ctrl = Paug_hst[i0][:n, :n]
         else:
             P0_ctrl = P_hst[i0]
-        P_u_ctrl = K_arc @ P0_ctrl @ K_arc.T
-        tcm_bound = unc.mx_tcm_bound * jnp.sqrt(mat_lmax(P_u_ctrl))
-        tcm_dV = unc.mx_dV_bound * jnp.sqrt(mat_lmax(P_u_ctrl))
-        u_norm = jnp.linalg.norm(U_arc)
+        P_control_arc = K_arc @ P0_ctrl @ K_arc.T
+        P_control_arc_hst = P_control_arc_hst.at[k].set(P_control_arc)
 
         gain_weights_hst = gain_weights_hst.at[i0:i_f].set(jnp.tile(gain_weights[k], (arc_len - 1, 1)))
         K_hst = K_hst.at[i0:i_f].set(jnp.tile(K_arc, (arc_len - 1, 1, 1)))
-        P_u_hst = P_u_hst.at[i0:i_f].set(jnp.tile(P_u_ctrl, (arc_len - 1, 1, 1)))
-        TCM_norm_bound_hst = TCM_norm_bound_hst.at[i0:i_f].set(tcm_bound)
-        TCM_norm_dV_hst = TCM_norm_dV_hst.at[i0:i_f].set(tcm_dV)
-        U_norm_bound_hst = U_norm_bound_hst.at[i0:i_f].set(u_norm + tcm_bound)
-        U_norm_dV_hst = U_norm_dV_hst.at[i0:i_f].set(u_norm + tcm_dV)
+        P_control_hst = P_control_hst.at[i0:i_f].set(jnp.tile(P_control_arc, (arc_len - 1, 1, 1)))
 
         if estimated:
             H_arc = meas.H_vmap(X_hst[i0:i_f + 1])
@@ -182,7 +190,7 @@ def generate_detailed_data(problem_def, top, xStar):
             for j in range(arc_len - 1):
                 upd = jnp.where((j + 1) % (N_save - 1) == 0, 1.0, 0.0)
                 Paug1, tau, gam, L1 = ekf_step(
-                    A_hst[i0 + j], B_hst[i0 + j], K_arc, P_u_arc, Paug0_arc,
+                    A_hst[i0 + j], B_hst[i0 + j], Hq_arc, K_arc, P_u_arc, Paug0_arc,
                     H_hst[i0 + j + 1], P_v_hst[i0 + j + 1], Paug_hst[i0 + j], tau, gam, upd)
                 Paug_hst = Paug_hst.at[i0 + j + 1].set(Paug1)
                 L_hst = L_hst.at[i0 + j + 1].set(L1)
@@ -190,11 +198,27 @@ def generate_detailed_data(problem_def, top, xStar):
             P0_arc = P_hst[i0]
             tau, gam = P0_arc, jnp.zeros((n, m))
             for j in range(arc_len - 1):
-                P1, tau, gam = cov_step(A_hst[i0 + j], B_hst[i0 + j], K_arc, P_u_arc,
+                P1, tau, gam = cov_step(A_hst[i0 + j], B_hst[i0 + j], Hq_arc, K_arc, P_u_arc,
                                         P0_arc, P_hst[i0 + j], tau, gam)
                 P_hst = P_hst.at[i0 + j + 1].set(P1)
 
+    # Control-norm bounds, from whichever formulation the representation uses
+    # (cartesian: nominal norm + quantile-scaled dispersion; regularized: the
+    # unified Patnaik quantile of the total command). Built here rather than
+    # inline above because both need the whole per-arc array at once. The
+    # replay always runs the analytic cov/EKF steps, so it always supplies
+    # P_control_arc_hst and never the sqrt factor.
+    bound_sol_data = {'control_arc_hst': control_arc_hst,
+                      'P_control_arc_hst': P_control_arc_hst}
+    U_norm_bound_arc = top._control_repr.stochastic_constraint_term(problem_def, bound_sol_data)
+    # Per-arc -> detailed resolution; the post-insertion tail stays zero.
+    U_norm_bound_hst = jnp.zeros((length,)).at[:transfer_len - 1].set(
+        jnp.repeat(U_norm_bound_arc, arc_len - 1))
+
     # ----- Phase 3b: post-insertion covariance (K=0, no noise/update) ------ #
+    # K is zero through the coast, so Hq (which only ever multiplies K) is
+    # inconsequential here - identity keeps it explicit.
+    eye_Hq = jnp.eye(m)
     if estimated:
         H_pi = meas.H_vmap(X_pi)
         P_v_pi = meas.P_v_vmap(X_pi)
@@ -204,7 +228,7 @@ def generate_detailed_data(problem_def, top, xStar):
         tau, gam = Paug0_pi, jnp.zeros((2 * n, m))
         for j in range(post_len - 1):
             Paug1, tau, gam, _ = ekf_step(
-                A_hst[pi0 + j], B_hst[pi0 + j], jnp.zeros((m, n)), jnp.zeros((m, m)), Paug0_pi,
+                A_hst[pi0 + j], B_hst[pi0 + j], eye_Hq, jnp.zeros((m, n)), jnp.zeros((m, m)), Paug0_pi,
                 H_hst[pi0 + j + 1], P_v_hst[pi0 + j + 1], Paug_hst[pi0 + j], tau, gam, 0.0)
             Paug_hst = Paug_hst.at[pi0 + j + 1].set(Paug1)
         Phat_hst = Paug_hst[:, :n, :n]
@@ -215,7 +239,7 @@ def generate_detailed_data(problem_def, top, xStar):
         P0_pi = P_hst[pi0]
         tau, gam = P0_pi, jnp.zeros((n, m))
         for j in range(post_len - 1):
-            P1, tau, gam = cov_step(A_hst[pi0 + j], B_hst[pi0 + j], jnp.zeros((m, n)),
+            P1, tau, gam = cov_step(A_hst[pi0 + j], B_hst[pi0 + j], eye_Hq, jnp.zeros((m, n)),
                                     jnp.zeros((m, m)), P0_pi, P_hst[pi0 + j], tau, gam)
             P_hst = P_hst.at[pi0 + j + 1].set(P1)
 
@@ -230,19 +254,25 @@ def generate_detailed_data(problem_def, top, xStar):
     else:
         tau, gam = P_Xf_targ, jnp.zeros((n, m))
         for j in range(post_len - 1):
-            P1, tau, gam = cov_step(A_hst[pi0 + j], B_hst[pi0 + j], jnp.zeros((m, n)),
+            P1, tau, gam = cov_step(A_hst[pi0 + j], B_hst[pi0 + j], eye_Hq, jnp.zeros((m, n)),
                                     jnp.zeros((m, m)), P_Xf_targ, P_Targ_hst[j], tau, gam)
             P_Targ_hst = P_Targ_hst.at[j + 1].set(P1)
 
     # ----- dV statistics + assemble ---------------------------------------- #
-    dV_stat = jnp.sum(TCM_norm_dV_hst[:-1] * U_acc / X_hst[:-1, -1] * dt_hst) * Vs
-    dV_bound = jnp.sum(U_norm_dV_hst[:-1] * U_acc / X_hst[:-1, -1] * dt_hst) * Vs
+    # dV_99, from the same representation-specific formulation the optimizer
+    # used, but weighted dimensionally (U_acc/mass*dt*Vs) rather than by bare
+    # arc length. The per-arc bound is piecewise-constant across an arc's
+    # detailed steps, so summing those step weights per arc reproduces the
+    # detailed-resolution integral exactly - transfer_len - 1 is exactly
+    # N_arcs * (arc_len - 1), so the reshape is a clean segment-sum.
+    w_detailed = U_acc / X_hst[:transfer_len - 1, -1] * dt_hst[:transfer_len - 1] * Vs
+    w_arc = w_detailed.reshape(N_arcs, arc_len - 1).sum(axis=1)
+    dV_bound = top._control_repr.stochastic_objective(problem_def, bound_sol_data, w_arc)
 
-    det.update({'TCM_norm_dV_hst': TCM_norm_dV_hst, 'TCM_norm_bound_hst': TCM_norm_bound_hst,
-                'U_norm_dV_hst': U_norm_dV_hst, 'U_norm_bound_hst': U_norm_bound_hst,
-                'dV_stat': dV_stat, 'dV_bound': dV_bound, 'A_hst': A_hst, 'B_hst': B_hst,
+    det.update({'U_norm_bound_hst': U_norm_bound_hst, 'dV_bound': dV_bound,
+                'A_hst': A_hst, 'B_hst': B_hst,
                 'K_hst': K_hst, 'gain_weights_hst': gain_weights_hst, 'K_arc_hst': K_arc_hst,
-                'P_hst': P_hst, 'P_u_hst': P_u_hst, 'P_Xf_targ': P_Xf_targ,
+                'P_hst': P_hst, 'P_control_hst': P_control_hst, 'P_Xf_targ': P_Xf_targ,
                 'P_XT_targ': P_XT_targ, 'P_Targ_hst': P_Targ_hst})
     if estimated:
         det.update({'Phat_hst': Phat_hst, 'Ptild_hst': Ptild_hst, 'Phattild_hst': Phattild_hst,

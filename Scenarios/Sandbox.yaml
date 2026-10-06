@@ -14,22 +14,22 @@ integration: # diffrax integrator adaptive step-controller tolerances (Dopri8 so
   r_tol: 1.e-12   # relative tolerance
 
 traj_parameters:
-  control_arcs: 50        # N_arcs - number of control arcs the transfer is divided into
+  control_arcs: 40        # N_arcs - number of control arcs the transfer is divided into
   sub_arcs: 1              # N_subarcs - number of sub-arcs (per control arc). Primarily used for more detailed covariance propagation within the optimization
   save_pts_detailed: 21    # N_save - detailed-resolution points saved per sub-arc when generate_data.py replays the solution
   MC_trials: 1000          # N_trials - number of Monte Carlo trials generate_data.py runs for stochastic cases
 
 boundary_conditions:
   t0: "2026-01-01T00:00:00"   # Initial epoch (ISO 8601) - used only to compute elapsed transfer time, not absolute ephemeris (could be used for time non-autonomous sytems in the future)
-  tf: "2026-01-31T00:00:00"   # Final epoch - (tf - t0) sets the total nondimensional transfer time
-  tf_T: 1.0                    # Post-insertion "safety coast" duration, in days, propagated with zero control past the final node
+  tf: "2026-01-16T00:00:00"   # Final epoch - (tf - t0) sets the total nondimensional transfer time
+  tf_T: 0.01                    # Post-insertion "safety coast" duration, in days, propagated with zero control past the final node
   initial_orbit:                       # Departure orbit, pulled from a precomputed periodic-orbit family file
-    family_path: 'data/EarthMoon_System/L2_S_Halo.h5'  # HDF5 family file (X_hst/t_hst/JCs/STMs/BrkVals) - see data/EarthMoon_System/
-    Orb_ID: 270                                       # Index into the family selecting a specific periodic orbit
+    family_path: 'data/EarthMoon_System/L1_N_Halo.h5'  # HDF5 family file (X_hst/t_hst/JCs/STMs/BrkVals) - see data/EarthMoon_System/
+    Orb_ID: 200                                       # Index into the family selecting a specific periodic orbit
     Start_Idx: 0                                       # Index into that orbit's saved states selecting the phasing start point
   final_orbit:                          # Arrival orbit - same schema as initial_orbit
-    family_path: 'data/EarthMoon_System/L1_Lyap.h5'
-    Orb_ID: 60
+    family_path: 'data/EarthMoon_System/L2_S_Halo.h5'
+    Orb_ID: 50
     Start_Idx: 0
 
 engine: # Spacecraft mass/thrust properties (nondimensionalized internally)
@@ -48,8 +48,8 @@ uncertainty:
       vel_sig: .001
       mass_sig: 1.e-12
     post_insert_target_total: # P_XT_targ - target true-state deviation covariance at the end of the post-insertion coast (what the optimizer is constrained to achieve)
-      pos_sig: 50
-      vel_sig: .01
+      pos_sig: 10
+      vel_sig: .001
       mass_sig: 60
   acc_sig: 5.e-12   # 1-sigma stochastic dynamics/process-noise acceleration [km/s^2] - builds the process-noise covariance G_stoch added every arc
   measurement: # Ground-station measurement model (estimated_state feedback only)

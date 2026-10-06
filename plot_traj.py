@@ -36,10 +36,10 @@ if __name__ == "__main__":
     Problem_Type = "stochastic_gauss_zoh"
 
     # Feedback Controller Types (stochastic only):
-    #   true_state | true_state_sqrt | estimated_state
+    #   true_state | true_state_sqrt | estimated_state | estimated_state_sqrt
     Feedback_Control_Type = "true_state"
 
-    # Measurement Types (estimated_state only):  range | range-rate | angles
+    # Measurement Types (estimated_state / estimated_state_sqrt only):  range | range-rate | angles
     Measurements = ("range", "range-rate", "angles")
 
     # Plot theme:  light | dark
@@ -55,7 +55,7 @@ if __name__ == "__main__":
     file_name = Problem_Type
     if Problem_Type.lower() == 'stochastic_gauss_zoh':
         file_name += "_" + Feedback_Control_Type
-        if Feedback_Control_Type.lower() == 'estimated_state':
+        if Feedback_Control_Type.lower() in ('estimated_state', 'estimated_state_sqrt'):
             file_name += "_" + "_".join(Measurements)
     case_dir = f"Results/{folder_name}/{file_name}/"
 

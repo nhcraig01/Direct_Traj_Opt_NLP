@@ -3,9 +3,11 @@
 # range with 1000 MC trials). sol.h5 + case.yaml are NOT ignored here - they
 # are the actual (tiny, ~8KB) solve results and are committed so a fresh
 # clone can regenerate/replot without re-solving.
-Results/*/*/data.h5
-Results/*/*/Sys.mat
-Results/*/*/*.png
+Results/**/data.h5
+Results/**/Sys.mat
+Results/**/*.png
+Results/**/solve_hist.hst
+
 
 # Python
 __pycache__/

@@ -34,34 +34,40 @@ def _build_measurement_functions(measurements, params):
 
     pos = sp.Matrix([[r_x], [r_y], [r_z]])
     pos_cov = sp.diag(params['pos_sig'] ** 2, params['pos_sig'] ** 2, params['pos_sig'] ** 2)
+    pos_cov_sqrt = sp.diag(params['pos_sig'], params['pos_sig'], params['pos_sig'])
 
     rng = sp.sqrt((rel_pos.T @ rel_pos)[0])
     rng_cov = sp.diag(params['range_sig'] ** 2)
+    rng_cov_sqrt = sp.diag(params['range_sig'])
 
     rng_rate = (rel_pos.T @ rel_vel)[0] / rng
     rng_rate_cov = sp.diag(params['rate_sig'] ** 2)
+    rng_rate_cov_sqrt = sp.diag(params['rate_sig'])
 
     theta = sp.atan2(rel_pos[1], rel_pos[0])
     phi = sp.asin(rel_pos[2] / rng)
     angles = sp.Matrix([[theta], [phi]])
     angles_cov = sp.diag(params['angles_sig'] ** 2, params['angles_sig'] ** 2)
+    angles_cov_sqrt = sp.diag(params['angles_sig'], params['angles_sig'])
 
-    meas_parts, cov_blocks = [], []
+    meas_parts, cov_blocks, cov_sqrt_blocks = [], [], []
     for meas in measurements:
         key = meas.lower()
         if key in ("position", "pos"):
-            meas_parts.append(pos); cov_blocks.append(pos_cov)
+            meas_parts.append(pos); cov_blocks.append(pos_cov); cov_sqrt_blocks.append(pos_cov_sqrt)
         elif key in ("range", "rng"):
-            meas_parts.append(sp.Matrix([[rng]])); cov_blocks.append(rng_cov)
+            meas_parts.append(sp.Matrix([[rng]])); cov_blocks.append(rng_cov); cov_sqrt_blocks.append(rng_cov_sqrt)
         elif key in ("range-rate", "rng-rate", "rate"):
-            meas_parts.append(sp.Matrix([[rng_rate]])); cov_blocks.append(rng_rate_cov)
+            meas_parts.append(sp.Matrix([[rng_rate]])); cov_blocks.append(rng_rate_cov); cov_sqrt_blocks.append(rng_rate_cov_sqrt)
         elif key in ("angles", "ang"):
-            meas_parts.append(angles); cov_blocks.append(angles_cov)
+            meas_parts.append(angles); cov_blocks.append(angles_cov); cov_sqrt_blocks.append(angles_cov_sqrt)
         else:
             raise ValueError(f"Measurement type '{meas}' not recognized.")
 
     meas_vec = sp.Matrix.vstack(*meas_parts)
     meas_cov = sp.diag(*cov_blocks)
+    meas_cov_sqrt = sp.diag(*cov_sqrt_blocks)
+
     n_state = int(X_sym.shape[0])
     n_meas = int(meas_vec.shape[0])
     meas_jac = meas_vec.jacobian(X_sym)
@@ -69,16 +75,19 @@ def _build_measurement_functions(measurements, params):
     h_raw = sp.lambdify((X_sym,), meas_vec, 'jax')
     H_raw = sp.lambdify((X_sym,), meas_jac, 'jax')
     P_v_raw = sp.lambdify((X_sym,), meas_cov, 'jax')
+    S_v_raw = sp.lambdify((X_sym,), meas_cov_sqrt, 'jax')
 
     h_eval = lambda x: jnp.reshape(h_raw(x), (n_meas,))
     H_eval = lambda x: jnp.reshape(H_raw(x), (n_meas, n_state))
     P_v_eval = lambda x: jnp.reshape(P_v_raw(x), (n_meas, n_meas))
+    S_v_eval = lambda x: jnp.reshape(S_v_raw(x), (n_meas, n_meas))
 
     return {
-        'h_eval': h_eval, 'P_v_eval': P_v_eval, 'n_meas': n_meas,
-        'h_vmap': jax.vmap(h_eval, in_axes=0),
-        'H_vmap': jax.vmap(H_eval, in_axes=0),
-        'P_v_vmap': jax.vmap(P_v_eval, in_axes=0),
+        'h_eval': h_eval, 'h_vmap': jax.vmap(h_eval, in_axes=0),
+        'H_eval': H_eval, 'H_vmap': jax.vmap(H_eval, in_axes=0),
+        'P_v_eval': P_v_eval, 'P_v_vmap': jax.vmap(P_v_eval, in_axes=0),
+        'S_v_eval': S_v_eval, 'S_v_vmap': jax.vmap(S_v_eval, in_axes=0),
+        'n_meas': n_meas
     }
 
 
@@ -94,15 +103,17 @@ class MeasurementModel:
     evaluated at each node's state rather than stored as a single constant.
     """
 
-    def __init__(self, h_eval: callable, P_v_eval: callable,
-                 h_vmap: callable, H_vmap: callable, P_v_vmap: callable, n_meas: int):
+    def __init__(self, h_eval: callable, P_v_eval: callable, S_v_eval: callable,
+                 h_vmap: callable, H_vmap: callable, P_v_vmap: callable, S_v_vmap: callable, n_meas: int):
         # Single-point evaluators (h_eval/P_v_eval) are used by the MC-trial
         # measurement draw; the vmapped forms drive the batched EKF loops.
         self.h_eval = h_eval
         self.P_v_eval = P_v_eval
+        self.S_v_eval = S_v_eval
         self.h_vmap = h_vmap
         self.H_vmap = H_vmap
         self.P_v_vmap = P_v_vmap
+        self.S_v_vmap = S_v_vmap
         self.n_meas = n_meas
 
     @classmethod
@@ -123,8 +134,10 @@ class MeasurementModel:
         return cls(
             h_eval=model['h_eval'],
             P_v_eval=model['P_v_eval'],
+            S_v_eval=model['S_v_eval'],
             h_vmap=model['h_vmap'],
             H_vmap=model['H_vmap'],
             P_v_vmap=model['P_v_vmap'],
+            S_v_vmap=model['S_v_vmap'],
             n_meas=model['n_meas'],
         )

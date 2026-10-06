@@ -14,7 +14,7 @@ single_trial returns).
 
 The nonlinear arc integration and A/B sensitivity primitives are reused in
 place from the Propagator instance StochasticTOP already built
-(propagator._propagate_arc, propagator._arc_dX0_vmap, ...); the estimated-state
+(propagator._propagate_arc, propagator._arc_dAB_vmap, ...); the estimated-state
 per-trial EKF reuses ErrorPropagator.subarc_ekf_step + its MeasurementModel.
 """
 
@@ -25,8 +25,9 @@ from jax import Array
 from tqdm import tqdm
 
 from .control_noise import MC_U_exe, MC_U_tcm_k, gates2Gexe
-from .error_propagator import ErrorPropagator
+from .error_propagator import ErrorPropagator, EstimatedStateCovPropagator
 from src.dynamics.propagator import Propagator
+from src.optimization.control_representation import ControlRepresentation
 from src.problem.problem_definition import ProblemDefinition
 from src.utils.math_utils import cart2sph_vmap
 
@@ -45,10 +46,11 @@ class MonteCarloRunner:
     _MC_N_LOOP = 5
 
     def __init__(self, problem_def: ProblemDefinition, propagator: Propagator,
-                 error_propagator: ErrorPropagator):
+                 error_propagator: ErrorPropagator, control_repr: ControlRepresentation):
         self._pd = problem_def
         self._prop = propagator              # nonlinear integrator + A/B sensitivities
         self._ep = error_propagator          # reuse subarc_ekf_step + MeasurementModel
+        self._control_repr = control_repr    # native-units nominal command + Hq (identity for cartesian)
 
     # --- to be implemented by feedback-type subclasses ---------------------
 
@@ -57,10 +59,28 @@ class MonteCarloRunner:
         the mean-trajectory data in sol_data and the static config."""
         raise NotImplementedError
 
-    def _postprocess(self, stacked: dict) -> dict:
+    def _postprocess(self, sol_data: dict, stacked: dict) -> dict:
         """Hook for derived batch statistics (e.g. mean covariances). Base is
         a no-op; run() returns whatever this yields."""
         return stacked
+
+    @staticmethod
+    def sample_covariance(mean: Array, trials: Array) -> Array:
+        """Empirical sample covariance of a batch of trajectories about a
+        reference mean, at every time step: cov[t] = (1/(N-1)) *
+        sum_k (trials[k,t]-mean[t]) @ (trials[k,t]-mean[t]).T
+
+        mean: (length, n) - the reference (e.g. the nominal/deterministic
+        trajectory). trials: (N, length, n) - N sampled realizations at the
+        same times. Returns (length, n, n).
+
+        Pure function, no sol_data/stacked coupling, no instance state -
+        applies identically regardless of feedback type (or even no feedback
+        at all), and to any (reference, batch-of-realizations) pair, not
+        just X_hst - e.g. reusable for U_hst or Xhat_hst deviations too.
+        """
+        deviations = trials - mean[None, :, :]           # (N, length, n)
+        return jnp.einsum('kti,ktj->tij', deviations, deviations) / (deviations.shape[0] - 1)
 
     # --- shared, feedback-agnostic per-trial helpers -----------------------
 
@@ -114,7 +134,7 @@ class MonteCarloRunner:
                   for i in tqdm(range(0, N, self._MC_N_LOOP))]
         stacked = jax.tree_util.tree_map(lambda *xs: jnp.concatenate(xs, axis=0), *chunks)
 
-        return self._postprocess(stacked)
+        return self._postprocess(sol_data, stacked)
 
 
 class TrueStateMCRunner(MonteCarloRunner):
@@ -141,11 +161,17 @@ class TrueStateMCRunner(MonteCarloRunner):
         tf_T = self._pd.boundary_conditions.tf_T
 
         # Nominal (mean-trajectory) data the feedback references, captured as
-        # constants of the returned pure closure.
+        # constants of the returned pure closure. det_U_arc is always
+        # cartesian (used for noise scaling, unaffected by representation);
+        # q_bar_arc_hst is in native (control_repr) units - the feedback
+        # correction U_tcm from K_arc_hst is in those same native units
+        # (K_arc_hst maps dx -> dq for regularized, dx -> du for cartesian),
+        # so it adds to q_bar_arc_hst, not det_U_arc, before conversion.
         det_X_node = sol_data['X_node_hst']                     # (N_arcs+1, n)
-        det_U_arc = sol_data['U_arc_hst'].reshape(N_arcs, m)    # (N_arcs, m)
+        det_U_arc = sol_data['U_arc_hst'].reshape(N_arcs, m)         # derived cartesian
+        q_bar_arc_hst = sol_data['control_arc_hst'].reshape(N_arcs, m)  # raw variable, native units
         K_arc_hst = sol_data['K_arc_hst']                       # (N_arcs, m, n)
-        t_node = sol_data['t_node_bound']                       # (N_arcs+1,)
+        t_node = sol_data['t_node_hst']                         # (N_arcs+1,)
         dV_mean = sol_data['dV_mean']
 
         propagate_arc = self._prop._propagate_arc               # nonlinear arc integrator
@@ -171,7 +197,8 @@ class TrueStateMCRunner(MonteCarloRunner):
 
                 U_tcm = MC_U_tcm_k(det_X_node[k], X0_arc, K_arc_hst[k])
                 U_exe, U_w = self._draw_arc_noise(keys_exe[k], keys_w[k], det_U_arc[k])
-                U_cmd = self._clamp_control(det_U_arc[k] + U_tcm)
+                q_tot = q_bar_arc_hst[k] + U_tcm
+                U_cmd = self._clamp_control(self._control_repr.to_cartesian_single(self._pd, q_tot))
                 U_tot = U_cmd + U_exe + U_w
 
                 X_arc = propagate_arc(X0_arc, U_tot, t_node[k], t_node[k + 1], arc_len)
@@ -197,16 +224,17 @@ class TrueStateMCRunner(MonteCarloRunner):
 
         return single_trial
 
-    def _postprocess(self, stacked: dict) -> dict:
+    def _postprocess(self, sol_data: dict, stacked: dict) -> dict:
         # Map the batched per-trial arrays onto the legacy MC_Runs keys that
         # save_sol writes, converting to numpy for h5py.
         return {
             'X_hsts': np.asarray(stacked['X_hst']),
             't_hsts': np.asarray(stacked['t_hst']),
             'U_hsts': np.asarray(stacked['U_hst']),
-            'U_hsts_sph': np.asarray(stacked['U_hst_sph']),
+            'U_hst_sph': np.asarray(stacked['U_hst_sph']),
             'dVs': np.asarray(stacked['dV']),
             'dV_tcms': np.asarray(stacked['dV_tcm']),
+            'P_trial_hst': np.asarray(self.sample_covariance(sol_data['X_hst'], stacked['X_hst'])),
         }
 
 
@@ -225,6 +253,16 @@ class EstimatedStateMCRunner(MonteCarloRunner):
     EstimatedStateCovPropagator.subarc_ekf_step in place for the covariance step.
 
     Requires N_save >= 2 (each subarc spans N_save detailed points).
+
+    Always uses EstimatedStateCovPropagator's analytic subarc_ekf_step/
+    init_error_state for this per-trial EKF, regardless of whether
+    EstimatedStateCovPropagator or EstimatedStateSqrtCovPropagator actually
+    ran the optimization (self._ep). The two are analytically equivalent;
+    sqrt form exists to help SNOPT's conditioning during optimization, not
+    to dictate how a post-hoc MC verification run works, and the sqrt
+    class doesn't expose subarc_ekf_step/the same init_error_state shape
+    at all - only K_arc_hst (identical either way) needs to carry over
+    from whichever propagator was actually used.
     """
 
     def build_single_trial(self, sol_data: dict) -> callable:
@@ -244,17 +282,22 @@ class EstimatedStateMCRunner(MonteCarloRunner):
         tf_T = self._pd.boundary_conditions.tf_T
 
         det_X_node = sol_data['X_node_hst']
-        det_U_arc = sol_data['U_arc_hst'].reshape(N_arcs, m)
+        det_U_arc = sol_data['U_arc_hst'].reshape(N_arcs, m)         # derived cartesian
+        q_bar_arc_hst = sol_data['control_arc_hst'].reshape(N_arcs, m)  # raw variable, native units
+        # Hq per arc, evaluated at the fixed mean regularized command - the
+        # same one applied to every trial - so this is identical to what
+        # control_jacobian_hst() computes for the deterministic/optimization
+        # side, not something re-linearized per trial.
+        Hq_arc_hst = jax.vmap(lambda q: self._control_repr.control_jacobian_single(self._pd, q))(q_bar_arc_hst)
         K_arc_hst = sol_data['K_arc_hst']
-        t_node = sol_data['t_node_bound']
+        t_node = sol_data['t_node_hst']
         dV_mean = sol_data['dV_mean']
 
         propagate_arc = self._prop._propagate_arc
-        A_vmap = self._prop._arc_dX0_vmap
-        B_vmap = self._prop._arc_dU_vmap
+        AB_vmap = self._prop._arc_dAB_vmap
         meas = self._ep._meas
-        ekf_step = self._ep.subarc_ekf_step
-        Paug0_init = self._ep.init_error_state(self._pd)     # (2n, 2n)
+        ekf_step = EstimatedStateCovPropagator.subarc_ekf_step
+        Paug0_init = EstimatedStateCovPropagator(self._pd).init_error_state(self._pd)     # (2n, 2n)
 
         def single_trial(rng_key: Array) -> dict:
             # Key layout mirrors legacy single_MC_trial (estimated_state):
@@ -287,7 +330,8 @@ class EstimatedStateMCRunner(MonteCarloRunner):
                 Paug0_arc = Paug_hst[arc_i0]
                 U_tcm = MC_U_tcm_k(det_X_node[k], Xhat0_arc, K_arc_hst[k])
                 U_exe, U_w = self._draw_arc_noise(keys_exe[k], keys_w[k], det_U_arc[k])
-                U_cmd = self._clamp_control(det_U_arc[k] + U_tcm)
+                q_tot = q_bar_arc_hst[k] + U_tcm
+                U_cmd = self._clamp_control(self._control_repr.to_cartesian_single(self._pd, q_tot))
                 U_tot = U_cmd + U_exe + U_w
                 P_exe_arc, _ = gates2Gexe(det_U_arc[k], gates)
                 P_u_arc = G_stoch + P_exe_arc
@@ -310,19 +354,20 @@ class EstimatedStateMCRunner(MonteCarloRunner):
                     # control only - no noise), re-linearize A/B/H/P_v along it.
                     Xhat_sub = propagate_arc(Xhat_hst[sub_i0], U_cmd, t_hst[sub_i0], t_hst[sub_if], N_save)
                     t_sub = t_hst[sub_i0:sub_if + 1]
-                    A_sub = A_vmap(Xhat_sub[:-1], U_cmd, t_sub[:-1], t_sub[1:])
-                    B_sub = B_vmap(Xhat_sub[:-1], U_cmd, t_sub[:-1], t_sub[1:])
+                    A_sub, B_sub = AB_vmap(Xhat_sub[:-1], U_cmd, t_sub[:-1], t_sub[1:])
                     H_sub = meas.H_vmap(Xhat_sub)
                     P_v_sub = meas.P_v_vmap(Xhat_sub)
                     Paug_sub0 = Paug_hst[sub_i0]
 
                     # Covariance across the subarc's detailed micro-steps;
                     # measurement update gated to the last step only.
+                    Hq_arc = Hq_arc_hst[k]
+
                     def micro_body(jj, carry):
                         Paug_js, tau, gam, L_end = carry
                         upd = jnp.where(jj == N_save - 2, 1.0, 0.0)
                         Paug_j1, tau, gam, L = ekf_step(
-                            A_sub[jj], B_sub[jj], K_arc_hst[k], P_u_arc, Paug_sub0,
+                            A_sub[jj], B_sub[jj], Hq_arc, K_arc_hst[k], P_u_arc, Paug_sub0,
                             H_sub[jj + 1], P_v_sub[jj + 1], Paug_js[jj], tau, gam, upd,
                         )
                         Paug_js = Paug_js.at[jj + 1].set(Paug_j1)
@@ -357,18 +402,18 @@ class EstimatedStateMCRunner(MonteCarloRunner):
 
             Xhat_pi = propagate_arc(Xhat_hst[pi0], jnp.zeros(m), t_hst[pi0], t_hst[pi0] + tf_T, post_len)
             Xhat_hst = Xhat_hst.at[pi0 + 1:].set(Xhat_pi[1:])
-            A_pi = A_vmap(Xhat_pi[:-1], jnp.zeros(m), t_pi[:-1], t_pi[1:])
-            B_pi = B_vmap(Xhat_pi[:-1], jnp.zeros(m), t_pi[:-1], t_pi[1:])
+            A_pi, B_pi = AB_vmap(Xhat_pi[:-1], jnp.zeros(m), t_pi[:-1], t_pi[1:])
             H_pi = meas.H_vmap(Xhat_pi)
             P_v_pi = meas.P_v_vmap(Xhat_pi)
             zeros_K = jnp.zeros((m, n))
             zeros_Pu = jnp.zeros((m, m))
+            eye_Hq = jnp.eye(m)  # K=0 here (no feedback), so Hq is inconsequential
             Paug_pi0 = Paug_hst[pi0]
 
             def coast_body(jj, carry):
                 Paug_js, tau, gam = carry
                 Paug_j1, tau, gam, _ = ekf_step(
-                    A_pi[jj], B_pi[jj], zeros_K, zeros_Pu, Paug_pi0,
+                    A_pi[jj], B_pi[jj], eye_Hq, zeros_K, zeros_Pu, Paug_pi0,
                     H_pi[jj + 1], P_v_pi[jj + 1], Paug_js[jj], tau, gam, 0.0,
                 )
                 Paug_js = Paug_js.at[jj + 1].set(Paug_j1)
@@ -388,13 +433,30 @@ class EstimatedStateMCRunner(MonteCarloRunner):
 
         return single_trial
 
-    def _postprocess(self, stacked: dict) -> dict:
+    def _postprocess(self, sol_data: dict, stacked: dict) -> dict:
         n = self._pd.dims.state_dim
         Paug = stacked['Paug']                       # (N, length, 2n, 2n)
         Phat = Paug[:, :, :n, :n]
         Ptild = Paug[:, :, n:, n:]
         Phattild = Paug[:, :, :n, n:]
         P = Phat - Phattild - Phattild.swapaxes(-1, -2) + Ptild
+
+        # Empirical (trial-realized) counterpart to Phat/Ptild/Phattild above,
+        # built the same way as TrueStateMCRunner's P_trial_hst but on a
+        # stacked [Xhat_dev; Xtilde] vector: Xhat_dev = Xhat - X_nom (mean =
+        # X_nom_hst), Xtilde = Xhat - X_true (mean = 0). Sign of Xtilde
+        # matches this class's own P = Phat - Phattild - Phattild.T + Ptild
+        # reconstruction above (delta_d = delta_xhat - delta_xtilde), so
+        # Phat_trial + Ptild_trial + Phattild_trial + Phattild_trial.T
+        # reproduces P_trial_hst (computed directly, no split) exactly.
+        X_nom_hst = sol_data['X_hst']                                          # (length, n)
+        Xtilde_hst = stacked['Xhat_hst'] - stacked['X_hst']                    # (N, length, n)
+        mean_aug = jnp.concatenate([X_nom_hst, jnp.zeros_like(X_nom_hst)], axis=-1)      # (length, 2n)
+        trials_aug = jnp.concatenate([stacked['Xhat_hst'], Xtilde_hst], axis=-1)         # (N, length, 2n)
+        Paug_trial = self.sample_covariance(mean_aug, trials_aug)             # (length, 2n, 2n)
+        Phat_trial = Paug_trial[:, :n, :n]
+        Ptild_trial = Paug_trial[:, n:, n:]
+        Phattild_trial = Paug_trial[:, :n, n:]
 
         out = {
             'X_hsts': np.asarray(stacked['X_hst']),
@@ -405,9 +467,13 @@ class EstimatedStateMCRunner(MonteCarloRunner):
             'Phattild_hsts': np.asarray(Phattild),
             't_hsts': np.asarray(stacked['t_hst']),
             'U_hsts': np.asarray(stacked['U_hst']),
-            'U_hsts_sph': np.asarray(stacked['U_hst_sph']),
+            'U_hst_sph': np.asarray(stacked['U_hst_sph']),
             'dVs': np.asarray(stacked['dV']),
             'dV_tcms': np.asarray(stacked['dV_tcm']),
+            'P_trial_hst': np.asarray(self.sample_covariance(X_nom_hst, stacked['X_hst'])),
+            'Phat_trial_hst': np.asarray(Phat_trial),
+            'Ptild_trial_hst': np.asarray(Ptild_trial),
+            'Phattild_trial_hst': np.asarray(Phattild_trial),
         }
         out['P_mean_hst'] = out['P_hsts'].mean(axis=0)
         out['Phat_mean_hst'] = out['Phat_hsts'].mean(axis=0)

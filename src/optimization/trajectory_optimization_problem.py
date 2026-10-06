@@ -14,18 +14,29 @@ from pyoptsparse import Optimization
 from .constraints import (
     Constraint,
     BoundaryConstraint, ControlNormConstraint, CovarianceConstraint, DetCollisionAvoidanceConstraint,
-    MatchPointConstraint, MeshConstraint, ControlNormRegConstraint
+    MatchPointConstraint, MeshConstraint,
 )
+from .control_representation import CartesianControl, ControlRepresentation, RegularizedControl
 from src.dynamics.equations_of_motion import CR3BPDynamics
 from src.dynamics.propagator import Propagator, StatePropagator, StateSensitivityPropagator
 from src.problem.data_structures import OptimizationVariable
 from src.problem.problem_definition import ProblemDefinition
 from src.stochastic.error_propagator import (
-    EstimatedStateCovPropagator, TrueStateCovPropagator, TrueStateSqrtCovPropagator,
+    EstimatedStateCovPropagator, EstimatedStateSqrtCovPropagator,
+    TrueStateCovPropagator, TrueStateSqrtCovPropagator,
 )
 from src.stochastic.gain_parameterization import LQRArcGains, LQRFullTrajGains
 from src.utils.io import process_sparsity
-from src.utils.math_utils import U_reg_to_U_cart_vmap, U_cart_to_U_reg_vmap
+
+_CONTROL_REPR_CLS = {'cartesian': CartesianControl, 'regularized': RegularizedControl}
+
+
+def _build_control_repr(problem_def: ProblemDefinition) -> ControlRepresentation:
+    control_representation = problem_def.toggles.control_representation.lower()
+    cls = _CONTROL_REPR_CLS.get(control_representation)
+    if cls is None:
+        raise ValueError(f"Unknown control_representation: {control_representation!r}")
+    return cls()
 
 
 class TrajectoryOptimizationProblem:
@@ -75,7 +86,9 @@ class TrajectoryOptimizationProblem:
         optprob = Optimization(type(self).__name__, vals)
 
         for v in self.variables():
-            optprob.addVarGroup(v.name, v.size, "c", value=init_guess.get(v.name, v.value), lower=v.lower, upper=v.upper)
+            value = init_guess.get(v.name, v.value)
+            lower, upper = (value, value) if v.pinned else (v.lower, v.upper)
+            optprob.addVarGroup(v.name, v.size, "c", value=value, lower=lower, upper=upper)
 
         optprob.addObj('o')
 
@@ -99,15 +112,26 @@ class TrajectoryOptimizationProblem:
 
         return optprob, sens
 
-
 class DeterministicTOP(TrajectoryOptimizationProblem):
+    """control_representation ('cartesian'/'regularized') is dispatched once
+    at construction time via self._control_repr - the rest of the pipeline
+    (variables/objective/evaluate) stays branch-free regardless of which one
+    is active, same pattern StochasticTOP already uses for
+    gain_param_type/feedback_control_type.
+
+    The control variable is always 'control_arc_hst' whatever the
+    representation; evaluate() converts it once, up front, into the derived
+    cartesian 'U_arc_hst' that the propagator and everything physical
+    downstream consumes."""
+
     def __init__(self, problem_def: ProblemDefinition):
         propagator = StatePropagator(problem_def, CR3BPDynamics(problem_def))
+        self._control_repr = _build_control_repr(problem_def)
         constraints_list = [
             BoundaryConstraint(problem_def, "initial"),
             BoundaryConstraint(problem_def, "final"),
             MatchPointConstraint(problem_def),
-            ControlNormConstraint(problem_def),
+            ControlNormConstraint(problem_def, self._control_repr),
         ]
         if problem_def.toggles.adaptive_mesh_type.lower() == 'adaptive_fixedtof':
             constraints_list.append(MeshConstraint(problem_def))
@@ -119,14 +143,8 @@ class DeterministicTOP(TrajectoryOptimizationProblem):
         dims = self._problem_def.dims
         bc = self._problem_def.boundary_conditions
 
-        U_size = dims.control_dim * dims.N_arcs
-
         variables_list = [
-            OptimizationVariable(
-                name='U_arc_hst', size=U_size,
-                lower=-jnp.ones(U_size), upper=jnp.ones(U_size), value=jnp.zeros(U_size),
-                guess_fn=lambda key, prior: jnp.sqrt(1e-1) * jax.random.normal(key, shape=(U_size,)),
-            ),
+            *self._control_repr.variables(self._problem_def, scale=3e-3),
             OptimizationVariable(
                 name='alpha', size=1,
                 lower=jnp.asarray(bc.alpha_min), upper=jnp.asarray(bc.alpha_max), value=jnp.asarray(bc.alpha_min),
@@ -158,34 +176,39 @@ class DeterministicTOP(TrajectoryOptimizationProblem):
             ),
         ]
 
-        if self._problem_def.toggles.adaptive_mesh_type.lower() == 'adaptive_fixedtof':
-            variables_list.append(OptimizationVariable(
-                name='t_node_bound', size=dims.N_nodes,
-                lower=jnp.zeros(dims.N_nodes), upper=jnp.full(dims.N_nodes, bc.t_node_bound[-1]),
-                value=bc.t_node_bound, guess_fn=lambda key, prior: bc.t_node_bound,
-            ))
+        # Always declared, whatever the mesh type - 'fixed' just pins it to its
+        # initial value (the hot start's mesh if there is one, else the
+        # scenario's), so nothing downstream has to branch on mesh type to find
+        # the arc lengths. Durations rather than cumulative node times: the
+        # dynamics are autonomous, so only durations are physical, and the
+        # difference operator relating the two costs cond(D)^2 in the Hessian.
+        dt_arc = jnp.diff(bc.t_node_bound)
+        variables_list.append(OptimizationVariable(
+            name='arc_length_hst', size=dims.N_arcs,
+            lower=jnp.full(dims.N_arcs, 1e-5), upper=jnp.full(dims.N_arcs, 1e6),
+            value=dt_arc, guess_fn=lambda key, prior: dt_arc,
+            pinned=self._problem_def.toggles.adaptive_mesh_type.lower() != 'adaptive_fixedtof',
+        ))
 
         return variables_list
 
     def objective(self, sol_data: dict) -> float:
         dims = self._problem_def.dims
 
-        eps = 1e-12
-        U_arc_hst = sol_data['U_arc_hst'].reshape(dims.N_arcs, dims.control_dim)
-        control_norms = jnp.sqrt(U_arc_hst[:, 0] ** 2 + U_arc_hst[:, 1] ** 2 + U_arc_hst[:, 2] ** 2 + eps)
+        control_norms = self._control_repr.control_norm_term(self._problem_def, sol_data)
 
-        t_node_bound = sol_data['t_node_bound']
-        arc_length_hst = jnp.diff(t_node_bound)
+        arc_length_hst = sol_data['arc_length_hst']
         J = control_norms @ arc_length_hst
 
         if self._problem_def.toggles.adaptive_mesh_type.lower() != 'fixed':
-            dt_even = (t_node_bound[-1] - t_node_bound[0]) / dims.N_arcs
-            rel_dt_err = arc_length_hst / dt_even - 1.0
-            J = J + 1e-6 * (rel_dt_err @ rel_dt_err)
+            J = J + 1e-6 * (arc_length_hst @ arc_length_hst)
 
         return J
 
     def evaluate(self, inputs: dict) -> dict:
+        inputs['U_arc_hst'] = self._control_repr.to_cartesian(
+            self._problem_def, inputs['control_arc_hst'],
+        )
         sol_data = self.propagate(dict(inputs))
 
         output = {'o': self.objective(sol_data)}
@@ -198,122 +221,27 @@ class DeterministicTOP(TrajectoryOptimizationProblem):
         jax.debug.print("J: {:.3e}" + fmt, output['o'], *args)
 
         return output
-
-class DeterministicTOPReg(TrajectoryOptimizationProblem):
-    def __init__(self, problem_def: ProblemDefinition):
-        propagator = StatePropagator(problem_def, CR3BPDynamics(problem_def))
-        constraints_list = [
-            BoundaryConstraint(problem_def, "initial"),
-            BoundaryConstraint(problem_def, "final"),
-            MatchPointConstraint(problem_def),
-            ControlNormRegConstraint(problem_def),
-        ]
-        if problem_def.toggles.adaptive_mesh_type.lower() == 'adaptive_fixedtof':
-            constraints_list.append(MeshConstraint(problem_def))
-        if problem_def.toggles.det_col_avoid and not problem_def.toggles.stat_col_avoid:
-            constraints_list.append(DetCollisionAvoidanceConstraint(problem_def))
-        super().__init__(problem_def, propagator, constraints_list)
-
-    def variables(self) -> list[OptimizationVariable]:
-        dims = self._problem_def.dims
-        bc = self._problem_def.boundary_conditions
-
-        U_size = dims.control_dim * dims.N_arcs
-
-        variables_list = [
-            OptimizationVariable(
-                name='U_reg_arc_hst', size=U_size,
-                lower=-jnp.ones(U_size), upper=jnp.ones(U_size),
-                value=jnp.zeros(U_size),
-                guess_fn=lambda key, prior: U_cart_to_U_reg_vmap(
-                    (jnp.sqrt(1e-1) * jax.random.normal(key, shape=(U_size,))).reshape(dims.N_arcs, dims.control_dim)
-                ).flatten(),
-            ),
-            OptimizationVariable(
-                name='alpha', size=1,
-                lower=jnp.asarray(bc.alpha_min), upper=jnp.asarray(bc.alpha_max),
-                value=jnp.asarray(bc.alpha_min),
-                guess_fn=lambda key, prior: jax.random.uniform(key, minval=bc.alpha_min, maxval=bc.alpha_max),
-            ),
-            OptimizationVariable(
-                name='beta', size=1,
-                lower=jnp.asarray(bc.beta_min), upper=jnp.asarray(bc.beta_max),
-                value=jnp.asarray(bc.beta_min),
-                guess_fn=lambda key, prior: jax.random.uniform(key, minval=bc.beta_min, maxval=bc.beta_max),
-            ),
-            OptimizationVariable(
-                name='X0', size=dims.state_dim,
-                lower=jnp.array([-10., -10., -10., -10., -10., -10., 1e-1]),
-                upper=jnp.array([10., 10., 10., 10., 10., 10., 1.]),
-                value=jnp.concatenate([bc.X0_init, jnp.array([1.0])]),
-                guess_fn=lambda key, prior: jnp.concatenate([
-                    bc.X0_interp.evaluate(prior['alpha']), jnp.array([1.0]),
-                ]),
-            ),
-            OptimizationVariable(
-                name='Xf', size=dims.state_dim,
-                lower=jnp.array([-10., -10., -10., -10., -10., -10., 1e-1]),
-                upper=jnp.array([10., 10., 10., 10., 10., 10., 1.]),
-                value=jnp.concatenate([bc.Xf_init, jnp.array([0.95])]),
-                guess_fn=lambda key, prior: jnp.concatenate([
-                    bc.Xf_interp.evaluate(prior['beta']), jnp.array([0.95]),
-                ]),
-            ),
-        ]
-
-        if self._problem_def.toggles.adaptive_mesh_type.lower() == 'adaptive_fixedtof':
-            variables_list.append(OptimizationVariable(
-                name='t_node_bound', size=dims.N_nodes,
-                lower=jnp.zeros(dims.N_nodes), upper=jnp.full(dims.N_nodes, bc.t_node_bound[-1]),
-                value=bc.t_node_bound, guess_fn=lambda key, prior: bc.t_node_bound,
-            ))
-
-        return variables_list
-
-    def objective(self, sol_data: dict) -> float:
-        dims = self._problem_def.dims
-
-        U_reg_arc_hst = sol_data['U_reg_arc_hst'].reshape(dims.N_arcs, dims.control_dim)
-        control_reg_dot = jnp.sum(U_reg_arc_hst ** 2, axis=1)
-
-        t_node_bound = sol_data['t_node_bound']
-        arc_length_hst = jnp.diff(t_node_bound)
-        J = control_reg_dot @ arc_length_hst
-
-        if self._problem_def.toggles.adaptive_mesh_type.lower() != 'fixed':
-            dt_even = (t_node_bound[-1] - t_node_bound[0]) / dims.N_arcs
-            rel_dt_err = arc_length_hst / dt_even - 1.0
-            J = J + 1e-6 * (rel_dt_err @ rel_dt_err)
-
-        return J
-
-    def evaluate(self, inputs: dict) -> dict:
-        dims = self._problem_def.dims
-        inputs['U_arc_hst'] = U_reg_to_U_cart_vmap(inputs['U_reg_arc_hst'].reshape(dims.N_arcs, dims.control_dim)).flatten()
-        sol_data = self.propagate(dict(inputs))
-
-        output = {'o': self.objective(sol_data)}
-        for c in self.constraints():
-            if c.linearities:
-                continue  # linear constraints evaluated by pyoptsparse via their jac, not vals()
-            output[c.name] = c.evaluate(self._problem_def, sol_data)
-
-        fmt, args = self._constraint_print_terms(output)
-        jax.debug.print("J: {:.3e}" + fmt, output['o'], *args)
-
-        return output
-
 
 class StochasticTOP(TrajectoryOptimizationProblem):
-    """Adds GainParameterization + ErrorPropagator to DeterministicTOP's
-    pipeline. evaluate() stays branch-free regardless of which gain/feedback
-    type is active - StochasticTOP.__init__ does the type dispatch once, at
-    construction time, and the rest of the pipeline just calls whichever
-    concrete instances got built.
+    """Adds ControlRepresentation + GainParameterization + ErrorPropagator to
+    DeterministicTOP's pipeline. evaluate() stays branch-free regardless of
+    which control representation/gain/feedback type is active -
+    StochasticTOP.__init__ does the type dispatch once, at construction
+    time, and the rest of the pipeline just calls whichever concrete
+    instances got built.
+
+    sol_data['Hq_arc_hst'] (this arc's d(U_cart)/d(U_repr) jacobian - identity
+    for cartesian) is stashed as its own key right after propagate(), rather
+    than folded into B_hst/B_arc_hst in place, so anything else that reads
+    the raw cartesian sensitivity (e.g. detailed_trajectory.py's dV
+    linearization) is unaffected; GainParameterization.compute_gains() and
+    ErrorPropagator.propagate_cov() each apply it locally, right where they
+    already consume B.
     """
 
     def __init__(self, problem_def: ProblemDefinition):
         propagator = StateSensitivityPropagator(problem_def, CR3BPDynamics(problem_def))
+        self._control_repr = _build_control_repr(problem_def)
 
         gain_param_type = problem_def.toggles.gain_param_type.lower()
         if gain_param_type == 'arc_lqr':
@@ -332,11 +260,13 @@ class StochasticTOP(TrajectoryOptimizationProblem):
             'true_state': TrueStateCovPropagator,
             'true_state_sqrt': TrueStateSqrtCovPropagator,
             'estimated_state': EstimatedStateCovPropagator,
+            'estimated_state_sqrt': EstimatedStateSqrtCovPropagator,
         }.get(feedback_control_type)
         if error_propagator_cls is None:
             raise NotImplementedError(
                 f"feedback_control_type={feedback_control_type!r} isn't implemented - "
-                f"expected one of 'true_state', 'true_state_sqrt', 'estimated_state'."
+                f"expected one of 'true_state', 'true_state_sqrt', 'estimated_state', "
+                f"'estimated_state_sqrt'."
             )
         self._error_propagator = error_propagator_cls(problem_def)
 
@@ -344,7 +274,7 @@ class StochasticTOP(TrajectoryOptimizationProblem):
             BoundaryConstraint(problem_def, "initial"),
             BoundaryConstraint(problem_def, "final"),
             MatchPointConstraint(problem_def),
-            ControlNormConstraint(problem_def, self._error_propagator),
+            ControlNormConstraint(problem_def, self._control_repr, stochastic=True),
             CovarianceConstraint(self._error_propagator),
         ]
         if problem_def.toggles.adaptive_mesh_type.lower() == 'adaptive_fixedtof':
@@ -360,14 +290,8 @@ class StochasticTOP(TrajectoryOptimizationProblem):
         dims = self._problem_def.dims
         bc = self._problem_def.boundary_conditions
 
-        U_size = dims.control_dim * dims.N_arcs
-
         variables_list = [
-            OptimizationVariable(
-                name='U_arc_hst', size=U_size,
-                lower=-jnp.ones(U_size), upper=jnp.ones(U_size), value=jnp.zeros(U_size),
-                guess_fn=lambda key, prior: jnp.sqrt(1e0) * jax.random.normal(key, shape=(U_size,)),
-            ),
+            *self._control_repr.variables(self._problem_def, scale=1e0),
             OptimizationVariable(
                 name='alpha', size=1,
                 lower=jnp.asarray(bc.alpha_min),
@@ -402,12 +326,19 @@ class StochasticTOP(TrajectoryOptimizationProblem):
             ),
         ]
 
-        if self._problem_def.toggles.adaptive_mesh_type.lower() == 'adaptive_fixedtof':
-            variables_list.append(OptimizationVariable(
-                name='t_node_bound', size=dims.N_nodes,
-                lower=jnp.zeros(dims.N_nodes), upper=jnp.full(dims.N_nodes, bc.t_node_bound[-1]),
-                value=bc.t_node_bound, guess_fn=lambda key, prior: bc.t_node_bound,
-            ))
+        # Always declared, whatever the mesh type - 'fixed' just pins it to its
+        # initial value (the hot start's mesh if there is one, else the
+        # scenario's), so nothing downstream has to branch on mesh type to find
+        # the arc lengths. Durations rather than cumulative node times: the
+        # dynamics are autonomous, so only durations are physical, and the
+        # difference operator relating the two costs cond(D)^2 in the Hessian.
+        dt_arc = jnp.diff(bc.t_node_bound)
+        variables_list.append(OptimizationVariable(
+            name='arc_length_hst', size=dims.N_arcs,
+            lower=jnp.full(dims.N_arcs, 1e-5), upper=jnp.full(dims.N_arcs, 1e6),
+            value=dt_arc, guess_fn=lambda key, prior: dt_arc,
+            pinned=self._problem_def.toggles.adaptive_mesh_type.lower() != 'adaptive_fixedtof',
+        ))
 
         variables_list += self._gain_param.variables()
 
@@ -416,32 +347,33 @@ class StochasticTOP(TrajectoryOptimizationProblem):
     def objective(self, sol_data: dict) -> float:
         dims = self._problem_def.dims
 
-        eps = 1e-12
-        U_arc_hst = sol_data['U_arc_hst'].reshape(dims.N_arcs, dims.control_dim)
-        control_norms = jnp.sqrt(U_arc_hst[:, 0] ** 2 + U_arc_hst[:, 1] ** 2 + U_arc_hst[:, 2] ** 2 + eps)
+        arc_length_hst = sol_data['arc_length_hst']
 
-        t_node_bound = sol_data['t_node_bound']
-        arc_length_hst = jnp.diff(t_node_bound)
-        J = control_norms @ arc_length_hst
+        J = self._control_repr.stochastic_objective(self._problem_def, sol_data, arc_length_hst)
 
         if self._problem_def.toggles.adaptive_mesh_type.lower() != 'fixed':
-            dt_even = (t_node_bound[-1] - t_node_bound[0]) / dims.N_arcs
-            rel_dt_err = arc_length_hst / dt_even - 1.0
-            J = J + 1e-6 * (rel_dt_err @ rel_dt_err)
+            J = J + 1e-10* (arc_length_hst @ arc_length_hst)
 
-        control_max_eig = self._error_propagator.stochastic_control_term(self._problem_def, sol_data)
-        J_stat = control_max_eig @ arc_length_hst
-
-        # Stash the deterministic/stochastic split for the progress print
+        # Stash a deterministic/stochastic split for the progress print
         # (consistent with the flat-sol_data pattern - keys added where
-        # computed). J itself is returned as the total objective.
-        sol_data['J_det'] = J
-        sol_data['J_stat'] = J_stat
+        # computed). For 'cartesian' this is the exact nominal/TCM split;
+        # for 'regularized' there's no such split any more (the mean command
+        # is baked into the unified quantile term), so J_det is just the
+        # plain nominal norm term and J_stat is whatever's left - informative
+        # for the print, not a physically separable quantity there. J itself
+        # (returned below) is the real objective either way.
+        J_det = self._control_repr.control_norm_term(self._problem_def, sol_data) @ arc_length_hst
+        sol_data['J_det'] = J_det
+        sol_data['J_stat'] = J - J_det
 
-        return J + J_stat
+        return J
 
     def evaluate(self, inputs: dict) -> dict:
+        inputs['U_arc_hst'] = self._control_repr.to_cartesian(
+            self._problem_def, inputs['control_arc_hst'],
+        )
         sol_data = self.propagate(dict(inputs))
+        sol_data['Hq_arc_hst'] = self._control_repr.control_jacobian_hst(self._problem_def, sol_data)
         sol_data = self._gain_param.compute_gains(self._problem_def, sol_data)
         sol_data = self._error_propagator.propagate_cov(self._problem_def, sol_data)
 

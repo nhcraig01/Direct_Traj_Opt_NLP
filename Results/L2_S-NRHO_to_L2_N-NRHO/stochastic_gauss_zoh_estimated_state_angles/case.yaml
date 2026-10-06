@@ -1,5 +1,6 @@
 scenario: L2_S-NRHO_to_L2_N-NRHO
 problem_type: stochastic_gauss_zoh
+control_representation: cartesian
 feedback_control_type: estimated_state
 measurements:
 - angles
@@ -7,7 +8,7 @@ gain_param_type: fulltraj_lqr
 adaptive_mesh_type: fixed
 alpha_rng:
 - 0.0
-- 0.0
+- 0.1
 beta_rng:
 - 0.0
-- 0.0
+- 0.1

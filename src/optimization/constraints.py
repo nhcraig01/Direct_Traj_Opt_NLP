@@ -17,9 +17,10 @@ replaces what used to be an error_state is None check.
 import jax.numpy as jnp
 from jax import Array
 
+from .control_representation import ControlRepresentation
 from src.problem.problem_definition import ProblemDefinition
 from src.stochastic.error_propagator import ErrorPropagator
-from src.utils.math_utils import adaptive_mesh_con_terms, col_avoid_vmap
+from src.utils.math_utils import col_avoid_vmap
 
 
 class Constraint:
@@ -63,7 +64,6 @@ class BoundaryConstraint(Constraint):
             beta = sol_data['beta']
             return (Xf[:6] - self._orbit_family.evaluate(beta)).flatten()
 
-
 class MatchPointConstraint(Constraint):
     """c_X_mp - identical for DeterministicTOP and StochasticTOP; only reads X_hst."""
 
@@ -76,67 +76,51 @@ class MatchPointConstraint(Constraint):
         X_hst = sol_data['X_hst']
         return (X_hst[bc.indx_f[-1], -1, :7] - X_hst[bc.indx_b[-1], 0, :7]).flatten()
 
-
 class ControlNormConstraint(Constraint):
-    """c_Us. Always includes control_norms; if an error_propagator is given
-    (StochasticTOP only), also adds its stochastic_control_term()."""
+    """c_Us. Representation-generic (see ControlRepresentation in
+    control_representation.py): the deterministic-only nominal
+    control_norm_term when stochastic is False (plain DeterministicTOP),
+    otherwise the representation's full stochastic_constraint_term -
+    cartesian adds a TCM bound to the nominal norm, regularized replaces it
+    entirely with a unified quantile bound (the mean command is already
+    folded in there, so there's no separate nominal term to add)."""
 
-    def __init__(self, problem_def: ProblemDefinition, error_propagator: ErrorPropagator | None = None):
-        self._error_propagator = error_propagator
+    def __init__(self, problem_def: ProblemDefinition, control_repr: ControlRepresentation,
+                 stochastic: bool = False):
+        self._control_repr = control_repr
+        self._stochastic = stochastic
         size = problem_def.dims.N_arcs
         super().__init__(name="c_Us", size=size, lower=-jnp.inf * jnp.ones(size), upper=jnp.ones(size))
 
     def evaluate(self, problem_def: ProblemDefinition, sol_data: dict) -> Array:
-        eps = 1e-12
-        U_arc_hst = sol_data['U_arc_hst'].reshape(problem_def.dims.N_arcs, problem_def.dims.control_dim)
-        control_norms = jnp.sqrt(U_arc_hst[:, 0] ** 2 + U_arc_hst[:, 1] ** 2 + U_arc_hst[:, 2] ** 2 + eps)
+        if not self._stochastic:
+            return self._control_repr.control_norm_term(problem_def, sol_data).flatten()
 
-        if self._error_propagator is None:
-            return control_norms.flatten()
-
-        stochastic_term = self._error_propagator.stochastic_control_term(problem_def, sol_data)
-        return (control_norms + stochastic_term).flatten()
-    
-class ControlNormRegConstraint(Constraint):
-    """c_Us. Always includes control_norms; if an error_propagator is given
-    (StochasticTOP only), also adds its stochastic_control_term()."""
-
-    def __init__(self, problem_def: ProblemDefinition, error_propagator: ErrorPropagator | None = None):
-        self._error_propagator = error_propagator
-        size = problem_def.dims.N_arcs
-        super().__init__(name="c_Us", size=size, lower=-jnp.inf * jnp.ones(size), upper=jnp.ones(size))
-
-    def evaluate(self, problem_def: ProblemDefinition, sol_data: dict) -> Array:
-        U_reg_arc_hst = sol_data['U_reg_arc_hst'].reshape(problem_def.dims.N_arcs, problem_def.dims.control_dim)
-        control_norms = jnp.sum(U_reg_arc_hst ** 2, axis=1)
-
-        if self._error_propagator is None:
-            return control_norms.flatten()
-
-        stochastic_term = self._error_propagator.stochastic_control_term(problem_def, sol_data)
-        return (control_norms + stochastic_term).flatten()
-
+        return self._control_repr.stochastic_constraint_term(problem_def, sol_data).flatten()
 
 class MeshConstraint(Constraint):
-    """c_t_node_bound - linear constraint for the adaptive_fixedtof mesh.
+    """c_arc_length - total time of flight, for the adaptive_fixedtof mesh.
 
-    Pins t_node_bound[0] = 0 and t_node_bound[-1] = tf (fixed total time of
-    flight) and bounds inter-node spacing to [dt_min, dt_max]. Purely linear
-    in t_node_bound, so evaluate() is never called - TOP.evaluate() skips
-    constraints with non-empty `linearities`.
+    One row: sum(arc_length_hst) == tf. With arc durations as the optimization
+    variable, node monotonicity is just each duration's own lower bound, so the
+    bidiagonal difference rows the node-time parameterization needed are gone
+    (42 rows on 41 variables -> 1 row on 40). Purely linear, so evaluate() is
+    never called - TOP.evaluate() skips constraints with non-empty
+    `linearities`.
+
+    Only added for adaptive_fixedtof: when the mesh is fixed the durations are
+    pinned by their own bounds, and this row would then be linearly dependent
+    on those - a degenerate active set.
     """
 
     def __init__(self, problem_def: ProblemDefinition):
         bc = problem_def.boundary_conditions
-
-        mesh_con_terms = adaptive_mesh_con_terms(bc.t_node_bound)
-        size = problem_def.dims.N_nodes + 1
+        tf = bc.t_node_bound[-1] - bc.t_node_bound[0]
         super().__init__(
-            name="c_t_node_bound", size=size,
-            lower=mesh_con_terms['lower'], upper=mesh_con_terms['upper'],
-            linearities={'t_node_bound': mesh_con_terms['jac']},
+            name="c_arc_length", size=1,
+            lower=jnp.atleast_1d(tf), upper=jnp.atleast_1d(tf),
+            linearities={'arc_length_hst': jnp.ones((1, problem_def.dims.N_arcs))},
         )
-
 
 class CovarianceConstraint(Constraint):
     """c_P_Xf - terminal covariance constraint (StochasticTOP only).
@@ -155,7 +139,6 @@ class CovarianceConstraint(Constraint):
 
     def evaluate(self, problem_def: ProblemDefinition, sol_data: dict) -> Array:
         return self._error_propagator.terminal_constraint_value(problem_def, sol_data)
-
 
 class DetCollisionAvoidanceConstraint(Constraint):
     """c_det_col_avoid - deterministic collision avoidance at each trajectory

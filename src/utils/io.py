@@ -89,6 +89,14 @@ _SNOPT_STAT_LABELS = {
     'Time for objective function': ('objective_func_time_s', float),
 }
 
+# Per-major-iteration series pySNOPT records into its history file. These are
+# the raw numbers SNOPT hands the wrapper at each major - the same quantities
+# its printed iteration table shows, but as floats rather than fixed-width
+# text, so there is no column-slicing or parenthesised-value parsing to get
+# wrong. See pySNOPT._snstop's iterDict.
+_SNOPT_ITER_KEYS = ('nMajor', 'nMinor', 'step', 'feasibility', 'optimality',
+                    'merit', 'condZHZ', 'penalty')
+
 
 def parse_snopt_stats(path='SNOPT_summary.out') -> dict:
     """Pull iteration/call/timing stats out of SNOPT's summary block. Each
@@ -103,30 +111,109 @@ def parse_snopt_stats(path='SNOPT_summary.out') -> dict:
         m = re.search(re.escape(label) + r'\s+([\d.]+)', text)
         if m:
             stats[key] = cast(m.group(1))
+
+    # Final objective and the EXIT/INFO status pair, which only appear in the
+    # trailing block rather than as label:value columns.
+    m = re.search(r'Objective\s+(-?[\d.]+E[-+]\d+)', text)
+    if m:
+        stats['f_star'] = float(m.group(1))
+    for tag, key in (('EXIT', 'exit'), ('INFO', 'info')):
+        m = re.search(r'SNOPTC ' + tag + r'\s+(\d+)\s*--\s*(.+)', text)
+        if m:
+            stats[key + '_code'] = int(m.group(1))
+            stats[key + '_text'] = m.group(2).strip()
     return stats
+
+
+SOLVE_LOG_NAMES = {'print': 'SNOPT_print.out',
+                   'summary': 'SNOPT_summary.out',
+                   'history': 'solve_hist.hst'}
+
+
+def parse_solve_stats(case_dir) -> dict:
+    """Solver diagnostics for a case, as a {iterations, summary} dict ready to
+    drop into data.h5.
+
+    `iterations` holds the per-major-iteration series (feasibility, optimality,
+    merit, ...) read from pyoptsparse's own history file - dir_traj_opt.py
+    points SNOPT's print/summary/history outputs at the case directory so they
+    travel with the solution rather than being left in the repo root.
+
+    Every key is always present. Anything unavailable (a case solved before
+    this existed, or data regenerated without a matching solve) is filled with
+    NaN rather than omitted, so the HDF5 schema stays fixed and MATLAB can
+    isnan() instead of testing for field existence.
+
+    case_dir=None returns the NaN defaults without looking for any logs - for
+    data generated without a solve of its own (see dir_traj_opt.py's
+    Run_Optimization bypass), where any logs sitting in the case directory
+    belong to a different solution."""
+    summary = {k: np.nan for _, (k, _c) in _SNOPT_STAT_LABELS.items()}
+    summary.update({'f_star': np.nan, 'exit_code': np.nan, 'info_code': np.nan,
+                    'exit_text': '', 'info_text': ''})
+    iterations = {k: np.full(1, np.nan) for k in _SNOPT_ITER_KEYS}
+
+    if case_dir is None:
+        return {'iterations': iterations, 'summary': summary}
+
+    # SNOPT's summary file is written to the working directory by default.
+    # Prefer a copy archived in the case dir if one is there, else fall back
+    # to that default - which assumes data generation follows the solve it
+    # belongs to, since nothing ties a root-level log to a particular case.
+    summary_path = next(
+        (p for p in (os.path.join(case_dir, SOLVE_LOG_NAMES['summary']),
+                     SOLVE_LOG_NAMES['summary']) if os.path.exists(p)),
+        None,
+    )
+    if summary_path is not None:
+        parsed = parse_snopt_stats(summary_path)
+        # exit_text/info_text are strings - keep them out of the numeric dict
+        # and hang them off as attributes via 0-d writes.
+        summary.update({k: v for k, v in parsed.items() if not k.endswith('_text')})
+        for k in ('exit_text', 'info_text'):
+            summary[k] = parsed.get(k, '')
+
+    hist_path = os.path.join(case_dir, SOLVE_LOG_NAMES['history'])
+    if os.path.exists(hist_path):
+        try:
+            from pyoptsparse import History
+            hist = History(hist_path)
+            vals = hist.getValues(names=list(_SNOPT_ITER_KEYS), major=True)
+            for k in _SNOPT_ITER_KEYS:
+                if k in vals:
+                    iterations[k] = np.asarray(vals[k]).squeeze()
+        except Exception as e:       # a truncated/locked .hst shouldn't kill data gen
+            print(f"  (solve history unreadable, filling NaN: {e})")
+
+    return {'iterations': iterations, 'summary': summary}
 
 
 # --------------------------------------------------------------------------- #
 # Solution (sol.h5) I/O
 # --------------------------------------------------------------------------- #
 
-_SOL_KEYS = ('X0', 'Xf', 'U_arc_hst', 'U_reg_arc_hst', 't_node_bound', 'alpha', 'beta', 'gain_weights')
+_SOL_KEYS = ('X0', 'Xf', 'control_arc_hst', 'arc_length_hst', 'alpha', 'beta', 'gain_weights')
 
 
-def save_solution(path, xStar, t_node_bound):
-    """Write the optimizer solution to sol.h5. t_node_bound is passed explicitly
-    (it is a fixed-mesh constant, not an xStar variable, unless adaptive) and
-    written unconditionally; every other key is written iff xStar actually has
-    it, so this covers X0/Xf (always present), U_arc_hst OR U_reg_arc_hst
-    (exactly one present, depending on control_representation), and the
-    genuinely-optional alpha/beta/gain_weights - all with the same rule."""
+def save_solution(path, xStar):
+    """Write the optimizer solution to sol.h5 - only optimization variables,
+    nothing derived. Each key is written iff xStar actually has it, covering
+    X0/Xf/control_arc_hst/arc_length_hst (always present) and the
+    genuinely-optional alpha/beta/gain_weights with the same rule.
+
+    Node times are NOT stored: they are the cumulative sum of arc_length_hst
+    (see propagator.node_times), and storing a derived quantity alongside the
+    variable it comes from is how the two drift apart.
+
+    control_arc_hst is stored raw, in whatever units the solve actually
+    optimized in - the reg->cart map isn't invertible in general, so a
+    cartesian-ised copy could not be converted back for a hot start. Which
+    units those are is recorded in the case's case.yaml
+    (control_representation), not in sol.h5 itself."""
     with h5py.File(path, "w") as f:
         for k in _SOL_KEYS:
-            if k == 't_node_bound':
-                continue
             if k in xStar:
                 f.create_dataset(k, data=np.asarray(xStar[k]))
-        f.create_dataset('t_node_bound', data=np.asarray(t_node_bound))
 
 
 def load_solution(path) -> dict:
@@ -140,48 +227,41 @@ def load_solution(path) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Results (data.h5) I/O - grouped schema
+# Results (data.h5) I/O - generic schema
 # --------------------------------------------------------------------------- #
 #
-#   /meta   : attributes (name, scenario, feedback_type, measurements,
-#             stochastic, N_arcs, N_subarcs, N_save, length_transfer, length_arc)
-#   /orbits : orb0_X orb0_t orbf_X orbf_t
-#   /det    : X t X_node t_node U U_sph U_arc  (+ dV_mean attr)
-#      +stoch: A B K K_arc gain_weights P U_bound tcm_bound U_dV tcm_dV P_u
-#              P_targ P_Xf_targ P_XT_targ  (+ dV_stat, dV_bound attrs)
-#      +est  : Phat Ptild Phattild H P_v
-#   /mc     : X t U U_sph dV dV_tcm
-#      +est  : Xhat P Phat Ptild Phattild P_mean Phat_mean Ptild_mean Phattild_mean
+# /meta holds the same fixed set of attributes as always (name, scenario,
+# feedback_type, measurements, stochastic, N_arcs, N_subarcs, N_save,
+# length_transfer, length_arc). /orbits, /det, /mc mirror data['Orb0']/
+# ['Orbf']/['Det']/['MC_Runs'] directly, one dataset/attribute/subgroup per
+# dict key, named verbatim - no separate name-mapping table to keep in sync
+# by hand every time a field is added on the Python side (see _write_group).
 
-# Det dict key -> /det dataset name (arrays); scalars go to /det attrs below.
-_DET_MAP = {
-    'X_hst': 'X', 't_hst': 't', 'X_node_hst': 'X_node', 't_node_hst': 't_node',
-    'U_hst': 'U', 'U_hst_sph': 'U_sph', 'U_arc_hst': 'U_arc',
-    'A_hst': 'A', 'B_hst': 'B', 'K_hst': 'K', 'K_arc_hst': 'K_arc',
-    'gain_weights_hst': 'gain_weights', 'P_hst': 'P', 'P_u_hst': 'P_u',
-    'U_norm_bound_hst': 'U_bound', 'TCM_norm_bound_hst': 'tcm_bound',
-    'U_norm_dV_hst': 'U_dV', 'TCM_norm_dV_hst': 'tcm_dV',
-    'P_Targ_hst': 'P_targ', 'P_Xf_targ': 'P_Xf_targ', 'P_XT_targ': 'P_XT_targ',
-    'Phat_hst': 'Phat', 'Ptild_hst': 'Ptild', 'Phattild_hst': 'Phattild',
-    'H_hst': 'H', 'P_v_hst': 'P_v',
-}
-_DET_SCALARS = ('dV_mean', 'dV_stat', 'dV_bound')
-
-# MC_Runs key -> /mc dataset name.
-_MC_MAP = {
-    'X_hsts': 'X', 't_hsts': 't', 'U_hsts': 'U', 'U_hsts_sph': 'U_sph',
-    'dVs': 'dV', 'dV_tcms': 'dV_tcm', 'Xhat_hsts': 'Xhat', 'P_hsts': 'P',
-    'Phat_hsts': 'Phat', 'Ptild_hsts': 'Ptild', 'Phattild_hsts': 'Phattild',
-    'P_mean_hst': 'P_mean', 'Phat_mean_hst': 'Phat_mean',
-    'Ptild_mean_hst': 'Ptild_mean', 'Phattild_mean_hst': 'Phattild_mean',
-}
+def _write_group(group, d):
+    """Recursively write dict `d` into HDF5 `group`: nested dicts become
+    subgroups, 0-d values become attributes, everything else becomes a
+    dataset (gzip-compressed if 2D+). Names are the dict keys verbatim."""
+    for k, v in d.items():
+        if isinstance(v, dict):
+            _write_group(group.create_group(k), v)
+        else:
+            arr = np.asarray(v)
+            if arr.ndim == 0:
+                group.attrs[k] = arr.item()
+            else:
+                kw = {'compression': 'gzip'} if arr.ndim >= 2 else {}
+                group.create_dataset(k, data=arr, **kw)
 
 
-def save_results(case_dir, data, problem_def):
+def save_results(case_dir, data, problem_def, solve_stats=True):
     """Write the grouped results data.h5 (+ Sys.mat) for a case.
 
     `data` is the {Name, Orb0, Orbf, Det, MC_Runs?} dict from the detailed
-    generator / MC runner; problem_def supplies the metadata + Sys."""
+    generator / MC runner; problem_def supplies the metadata + Sys.
+
+    solve_stats=False NaN-fills the solve_stats group instead of reading the
+    case directory's logs - for data whose solution did not come from a solve
+    in that directory."""
     tg = problem_def.toggles
     det = data['Det']
     with h5py.File(os.path.join(case_dir, 'data.h5'), 'w') as f:
@@ -197,27 +277,14 @@ def save_results(case_dir, data, problem_def):
         meta.attrs['length_transfer'] = int(det['length_transfer'])
         meta.attrs['length_arc'] = int(det['length_arc'])
 
-        orb = f.create_group('orbits')
-        orb.create_dataset('orb0_X', data=np.asarray(data['Orb0']['X_hst']))
-        orb.create_dataset('orb0_t', data=np.asarray(data['Orb0']['t_hst']))
-        orb.create_dataset('orbf_X', data=np.asarray(data['Orbf']['X_hst']))
-        orb.create_dataset('orbf_t', data=np.asarray(data['Orbf']['t_hst']))
-
-        dg = f.create_group('det')
-        for src_k, dst_k in _DET_MAP.items():
-            if src_k in det:
-                dg.create_dataset(dst_k, data=np.asarray(det[src_k]))
-        for s in _DET_SCALARS:
-            if s in det:
-                dg.attrs[s] = float(np.asarray(det[s]))
-
+        _write_group(f.create_group('orbits'), {'Orb0': data['Orb0'], 'Orbf': data['Orbf']})
+        _write_group(f.create_group('det'), det)
         if 'MC_Runs' in data:
-            mc = f.create_group('mc')
-            for src_k, dst_k in _MC_MAP.items():
-                if src_k in data['MC_Runs']:
-                    arr = np.asarray(data['MC_Runs'][src_k])
-                    kw = {'compression': 'gzip'} if arr.ndim >= 2 else {}
-                    mc.create_dataset(dst_k, data=arr, **kw)
+            _write_group(f.create_group('mc'), data['MC_Runs'])
+        # Always written, NaN-filled when no matching solve artifacts exist,
+        # so the schema MATLAB reads never changes shape.
+        _write_group(f.create_group('solve_stats'),
+                     parse_solve_stats(case_dir if solve_stats else None))
 
     savemat(os.path.join(case_dir, 'Sys.mat'), problem_def.Sys)
 

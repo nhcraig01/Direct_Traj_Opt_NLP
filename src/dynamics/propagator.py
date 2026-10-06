@@ -13,6 +13,17 @@ from .equations_of_motion import EquationsOfMotion
 from src.problem.problem_definition import ProblemDefinition
 
 
+def node_times(arc_length_hst):
+    """Cumulative node times from arc durations, (N_arcs,) -> (N_arcs+1,).
+
+    Output only. The dynamics are autonomous, so each arc is integrated over
+    [0, dt_i] and no absolute time ever enters the differentiated path - which
+    keeps arc i's sensitivity structurally independent of every other arc's
+    duration, rather than relying on dX/dt0 + dX/dt1 cancelling numerically.
+    """
+    return jnp.concatenate([jnp.zeros(1), jnp.cumsum(arc_length_hst)])
+
+
 def AB_rev2fwd(A_rev, B_rev):
     """Convert reverse-time arc sensitivities to forward-equivalent ones."""
     A_fwd = jnp.linalg.inv(A_rev)
@@ -67,16 +78,13 @@ class StatePropagator(Propagator):
         X0 = sol_data['X0']
         Xf = sol_data['Xf']
         U_arc_hst = sol_data['U_arc_hst'].reshape(dims.N_arcs, dims.control_dim)
-        if problem_def.toggles.adaptive_mesh_type.lower() == 'adaptive_fixedtof':
-            t_node_bound = sol_data['t_node_bound']
-        else:
-            t_node_bound = bc.t_node_bound
+        arc_length_hst = sol_data['arc_length_hst']
 
         X_hst = jnp.zeros((dims.N_arcs, dims.N_subarcs + 1, dims.state_dim))
 
         def fwd_body(i, carry):
             X0_true_f, X_hst = carry
-            X_arc = self._propagate_arc(X0_true_f, U_arc_hst[i, :], t_node_bound[i], t_node_bound[i + 1], dims.arc_length_opt)
+            X_arc = self._propagate_arc(X0_true_f, U_arc_hst[i, :], 0.0, arc_length_hst[i], dims.arc_length_opt)
             X_hst = X_hst.at[i, :, :].set(X_arc)
             return X_arc[-1, :], X_hst
 
@@ -85,13 +93,14 @@ class StatePropagator(Propagator):
         def bwd_body(ii, carry):
             X0_true_b, X_hst = carry
             i = bc.indx_b[ii]
-            X_arc_b = self._propagate_arc(X0_true_b, U_arc_hst[i, :], t_node_bound[i + 1], t_node_bound[i], dims.arc_length_opt)
+            X_arc_b = self._propagate_arc(X0_true_b, U_arc_hst[i, :], arc_length_hst[i], 0.0, dims.arc_length_opt)
             X_arc_f = jnp.flipud(X_arc_b)
             X_hst = X_hst.at[i, :, :].set(X_arc_f)
             return X_arc_b[-1, :], X_hst
 
         X0_true_b, X_hst = jax.lax.fori_loop(0, len(bc.indx_b), bwd_body, (Xf, X_hst))
 
+        t_node_bound = node_times(arc_length_hst)
         t_hst = jax.vmap(lambda t0, t1: jnp.linspace(t0, t1, dims.arc_length_opt))(t_node_bound[:-1], t_node_bound[1:])
 
         sol_data['X_hst'] = X_hst
@@ -134,10 +143,11 @@ class StateSensitivityPropagator(Propagator):
             return sol.ys[-1].flatten()
 
         self._propagate_final = _propagate_final
-        self._arc_dX0 = jax.jacfwd(_propagate_final, argnums=0)  # (state_dim, state_dim)
-        self._arc_dU = jax.jacfwd(_propagate_final, argnums=1)   # (state_dim, control_dim)
-        self._arc_dX0_vmap = jax.vmap(self._arc_dX0, in_axes=(0, None, 0, 0))
-        self._arc_dU_vmap = jax.vmap(self._arc_dU, in_axes=(0, None, 0, 0))
+        # Both jacobians from one solve - separate argnums calls integrate the
+        # primal (and re-run the step-size controller) twice.
+        self._arc_dAB = jax.jacfwd(_propagate_final, argnums=(0, 1))  # (A, B)
+        self._arc_dAB_vmap = jax.vmap(self._arc_dAB, in_axes=(0, None, 0, 0))
+        self._arc_dX0 = jax.jacfwd(_propagate_final, argnums=0)  # A_postinsert only
 
     def propagate(self, problem_def: ProblemDefinition, sol_data: dict) -> dict:
         dims = problem_def.dims
@@ -146,10 +156,7 @@ class StateSensitivityPropagator(Propagator):
         X0 = sol_data['X0']
         Xf = sol_data['Xf']
         U_arc_hst = sol_data['U_arc_hst'].reshape(dims.N_arcs, dims.control_dim)
-        if problem_def.toggles.adaptive_mesh_type.lower() == 'adaptive_fixedtof':
-            t_node_bound = sol_data['t_node_bound']
-        else:
-            t_node_bound = bc.t_node_bound
+        arc_length_hst = sol_data['arc_length_hst']
 
         # Initialize all histories to zero
         X_hst = jnp.zeros((dims.N_arcs, dims.N_subarcs + 1, dims.state_dim))
@@ -162,20 +169,18 @@ class StateSensitivityPropagator(Propagator):
             X0_f, X_hst, A_hst, B_hst, A_arc_hst, B_arc_hst = carry
 
             # State propagation
-            X_arc = self._propagate_arc(X0_f, U_arc_hst[i], t_node_bound[i], t_node_bound[i + 1], dims.arc_length_opt)
+            X_arc = self._propagate_arc(X0_f, U_arc_hst[i], 0.0, arc_length_hst[i], dims.arc_length_opt)
             X_hst = X_hst.at[i, :, :].set(X_arc)
 
             # Arc-level state-transition and input-sensitivity matrices
-            A_i = self._arc_dX0(X0_f, U_arc_hst[i], t_node_bound[i], t_node_bound[i + 1])
-            B_i = self._arc_dU(X0_f, U_arc_hst[i], t_node_bound[i], t_node_bound[i + 1])
+            A_i, B_i = self._arc_dAB(X0_f, U_arc_hst[i], 0.0, arc_length_hst[i])
             A_arc_hst = A_arc_hst.at[i, :, :].set(A_i)
             B_arc_hst = B_arc_hst.at[i, :, :].set(B_i)
 
             # Sub-arc sensitivities
-            t_arc = jnp.linspace(t_node_bound[i], t_node_bound[i + 1], dims.arc_length_opt)
+            t_arc = jnp.linspace(0.0, arc_length_hst[i], dims.arc_length_opt)
             if dims.N_subarcs > 1:
-                A_js = self._arc_dX0_vmap(X_arc[:-1], U_arc_hst[i], t_arc[:-1], t_arc[1:])
-                B_js = self._arc_dU_vmap(X_arc[:-1], U_arc_hst[i], t_arc[:-1], t_arc[1:])
+                A_js, B_js = self._arc_dAB_vmap(X_arc[:-1], U_arc_hst[i], t_arc[:-1], t_arc[1:])
             else:
                 A_js = A_i[None, :, :]
                 B_js = B_i[None, :, :]
@@ -194,22 +199,20 @@ class StateSensitivityPropagator(Propagator):
             i = bc.indx_b[ii]
 
             # State propagation in reverse time, then flip to forward order
-            X_arc_b = self._propagate_arc(X0_b, U_arc_hst[i], t_node_bound[i + 1], t_node_bound[i], dims.arc_length_opt)
+            X_arc_b = self._propagate_arc(X0_b, U_arc_hst[i], arc_length_hst[i], 0.0, dims.arc_length_opt)
             X_arc_f = jnp.flipud(X_arc_b)
             X_hst = X_hst.at[i, :, :].set(X_arc_f)
 
             # Arc-level sensitivities in reverse time, converted to forward-equivalent
-            A_i_b = self._arc_dX0(X0_b, U_arc_hst[i], t_node_bound[i + 1], t_node_bound[i])
-            B_i_b = self._arc_dU(X0_b, U_arc_hst[i], t_node_bound[i + 1], t_node_bound[i])
+            A_i_b, B_i_b = self._arc_dAB(X0_b, U_arc_hst[i], arc_length_hst[i], 0.0)
             A_i_f, B_i_f = AB_rev2fwd(A_i_b, B_i_b)
             A_arc_hst = A_arc_hst.at[i, :, :].set(A_i_f)
             B_arc_hst = B_arc_hst.at[i, :, :].set(B_i_f)
 
             # Sub-arc sensitivities (backward time, then converted + flipped)
-            t_arc_b = jnp.linspace(t_node_bound[i + 1], t_node_bound[i], dims.arc_length_opt)
+            t_arc_b = jnp.linspace(arc_length_hst[i], 0.0, dims.arc_length_opt)
             if dims.N_subarcs > 1:
-                A_js_b = self._arc_dX0_vmap(X_arc_b[:-1], U_arc_hst[i], t_arc_b[:-1], t_arc_b[1:])
-                B_js_b = self._arc_dU_vmap(X_arc_b[:-1], U_arc_hst[i], t_arc_b[:-1], t_arc_b[1:])
+                A_js_b, B_js_b = self._arc_dAB_vmap(X_arc_b[:-1], U_arc_hst[i], t_arc_b[:-1], t_arc_b[1:])
                 A_js_f, B_js_f = AB_rev2fwd_vmap(A_js_b, B_js_b)
                 A_js_f = jnp.flipud(A_js_f)
                 B_js_f = jnp.flipud(B_js_f)
@@ -226,14 +229,17 @@ class StateSensitivityPropagator(Propagator):
             (Xf, X_hst, A_hst, B_hst, A_arc_hst, B_arc_hst),
         )
 
+        t_node_bound = node_times(arc_length_hst)
         t_hst = jax.vmap(lambda t0, t1: jnp.linspace(t0, t1, dims.arc_length_opt))(t_node_bound[:-1], t_node_bound[1:])
 
         # Post-insertion coast STM (zero control, fixed duration tf_T) - used
         # by ErrorPropagator.terminal_constraint_value() for the c_P_Xf-style
         # terminal-covariance constraint. Same endpoint-jacfwd machinery as
-        # the regular arcs, just one more call.
+        # the regular arcs, just one more call. Integrated over [0, tf_T]: the
+        # coast is autonomous and of fixed duration, so it does not depend on
+        # the mesh at all.
         A_postinsert = self._arc_dX0(
-            Xf, jnp.zeros(dims.control_dim), t_node_bound[-1], t_node_bound[-1] + bc.tf_T,
+            Xf, jnp.zeros(dims.control_dim), 0.0, bc.tf_T,
         )
 
         sol_data['X_hst'] = X_hst

@@ -5,10 +5,12 @@ actually uses), so src/ no longer depends on Lib. Pure functions only - no
 problem/state coupling.
 """
 
+import diffrax as dfx
 import jax
 import jax.numpy as jnp
 import numpy as np
 from astropy.time import Time
+from scipy import stats
 
 
 # --------------------------------------------------------------------------- #
@@ -88,23 +90,6 @@ def col_avoid(X, dyn_args):
 col_avoid_vmap = jax.vmap(col_avoid, in_axes=(0, None))
 
 
-def adaptive_mesh_con_terms(t_node_bound, dt_min=1e-5, dt_max=1e6):
-    """Linear (jac/lower/upper) terms enforcing monotone node times + fixed tf."""
-    n = t_node_bound.shape[0]
-    tf = t_node_bound[-1]
-
-    jac = jnp.zeros((n + 1, n))
-    jac = jac.at[0, 0].set(1.0)
-    for i in range(n - 1):
-        jac = jac.at[i + 1, i].set(-1.0)
-        jac = jac.at[i + 1, i + 1].set(1.0)
-    jac = jac.at[-1, -1].set(1.0)
-
-    lower = jnp.zeros(n + 1).at[0].set(0.0).at[1:n].set(dt_min).at[-1].set(tf)
-    upper = jnp.zeros(n + 1).at[0].set(0.0).at[1:n].set(dt_max).at[-1].set(tf)
-
-    return {'jac': jac, 'lower': lower, 'upper': upper}
-
 # --------------------------------------------------------------------------- #
 # Control Functions (Regularization)
 # --------------------------------------------------------------------------- #
@@ -141,3 +126,67 @@ def U_cart_to_U_reg(U_cart):
     return U_reg
 
 U_cart_to_U_reg_vmap = jax.vmap(U_cart_to_U_reg, in_axes=(0,))
+
+
+# --------------------------------------------------------------------------- #
+# Stochastic control regularization (Patnaik quantile of q^T q)
+# --------------------------------------------------------------------------- #
+
+def patnaik_rho_nu_from_cov(q_bar, P_q):
+    """Patnaik (Pearson Type III / scaled chi-squared) approximation of the
+    generalized non-central chi-squared distribution of Q = q^T q, where
+    q ~ N(q_bar, P_q). Returns (rho, nu) such that Q ~ rho * chi2_nu,
+    mean/variance-matched to the true distribution of Q."""
+    tr_Pq = jnp.trace(P_q)
+    tr_Pq2 = jnp.trace(P_q @ P_q)
+    qPq = q_bar @ P_q @ q_bar
+    qq = q_bar @ q_bar
+
+    term1 = tr_Pq2 + 2 * qPq
+    term2 = tr_Pq + qq
+
+    eps = 1e-12
+    rho = term1 / term2
+    nu = term2 ** 2 / term1
+
+    return rho, nu
+
+
+patnaik_rho_nu_from_cov_vmap = jax.vmap(patnaik_rho_nu_from_cov, in_axes=(0, 0))
+
+
+def _build_chi2_quantile_interp(p):
+    """Differentiable F^{-1}_chi2_nu(p) as a function of continuous nu, built
+    once via a precomputed grid (scipy, host-side) + diffrax cubic Hermite
+    interpolation - same pattern as X0_interp/Xf_interp in problem_definition.py.
+    Two pieces: dense near the origin, where the ppf is sharply nonlinear,
+    then a sparser, wide-ranging geometric grid out to 1e5, where the ppf is
+    practically linear (chi2_nu ~ Normal(nu, 2nu) for large nu)."""
+    nu_grid = np.concatenate([
+        np.linspace(0.0, 10.0, 1000),
+        np.geomspace(10.0, 1e9, 5000)[1:],
+    ])
+    quantiles = stats.chi2.ppf(p, df=nu_grid)
+    nu_grid, quantiles = jnp.asarray(nu_grid), jnp.asarray(quantiles)
+    coefs = dfx.backward_hermite_coefficients(nu_grid, quantiles)
+    return dfx.CubicInterpolation(nu_grid, coefs)
+
+
+# Only these two quantiles are needed (99% objective / 99.9% constraint,
+# mirroring the existing mx_dV_bound/mx_tcm_bound split) - built once at
+# import time since this depends only on (p, nu), never on a specific
+# ProblemDefinition.
+_CHI2_QUANTILE_INTERPS = {
+    0.99: _build_chi2_quantile_interp(0.99),
+    0.999: _build_chi2_quantile_interp(0.999),
+}
+
+
+def chi2_inv_cdf(nu, p):
+    """F^{-1}_chi2_nu(p) for continuous nu, via the precomputed interpolants
+    above. p must be a literal Python float in {0.99, 0.999} (a static
+    dispatch key, not a traced value)."""
+    return _CHI2_QUANTILE_INTERPS[p].evaluate(nu)
+
+
+chi2_inv_cdf_vmap = jax.vmap(chi2_inv_cdf, in_axes=(0, None))

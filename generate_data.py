@@ -1,17 +1,23 @@
 """Generate detailed-trajectory + Monte Carlo DATA for a solved case.
 
-Second stage of the pipeline (solve -> generate -> plot). Given a case directory
-Results/<scenario>/<case>/ holding sol.h5 + case.yaml, it rebuilds the exact
-ProblemDefinition/StochasticTOP from the manifest, replays the detailed
-deterministic trajectory + orbit histories (src/postprocess/detailed_trajectory.py),
-runs the Monte Carlo trials with the runner the feedback type implies, and writes
-the grouped data.h5 + Sys.mat into the case dir for plot_traj.py / MATLAB.
+Second stage of the pipeline (solve -> generate -> plot). generate_data() is
+handed a solution dict + the case.yaml toggles that go with it, rebuilds the
+exact ProblemDefinition/StochasticTOP, replays the detailed deterministic
+trajectory + orbit histories (src/postprocess/detailed_trajectory.py), runs the
+Monte Carlo trials with the runner the feedback type implies, and writes the
+grouped data.h5 + Sys.mat into case_dir for plot_traj.py / MATLAB.
+
+It does no loading of its own - reading sol.h5/case.yaml off disk is the
+caller's job (see __main__ below). That lets dir_traj_opt.py pass the solution
+it already has in memory, solved or not, and lets a solution be run through a
+DIFFERENT formulation's data generation (e.g. a true_state solution through the
+estimated_state Monte Carlo) without staging files to match.
 
 Fully OOP - no legacy code: the detailed generator, MC runners and results
 writer all live in src/. The MC dispatch and measurement model are automatic,
 reconstructed from case.yaml via StochasticTOP.
 
-Run directly (edit the config block to pick a case) or call generate_data(case_dir).
+Run directly (edit the config block to pick a case) or call generate_data().
 """
 
 import os
@@ -34,42 +40,35 @@ from src.postprocess.detailed_trajectory import generate_detailed_data
 from src.utils.io import yaml_load, load_solution, save_results
 from src.stochastic.mc_runner import EstimatedStateMCRunner, TrueStateMCRunner
 from src.problem.problem_definition import build_problem_def
-from src.optimization.trajectory_optimization_problem import DeterministicTOP, DeterministicTOPReg, StochasticTOP
+from src.optimization.trajectory_optimization_problem import DeterministicTOP, StochasticTOP
 
 
-def generate_data(case_dir, seed=0):
-    """Rebuild the problem from case.yaml, propagate + run Monte Carlo, and write
-    the grouped data.h5 + Sys.mat into case_dir."""
-    scenario, toggles = load_case_spec(case_dir)
+def generate_data(xStar, scenario, toggles, case_dir, seed=0, solve_stats=True):
+    """Propagate + run Monte Carlo for `xStar` under `toggles`, and write the
+    grouped data.h5 + Sys.mat into case_dir.
+
+    xStar/toggles are passed in rather than read from case_dir, so the solution
+    need not be the one sitting in that directory. solve_stats=False NaN-fills
+    the solve_stats group, for a solution that wasn't produced by a solve there.
+    """
     problem_def = build_problem_def(yaml_load(f"Scenarios/{scenario}.yaml"), toggles)
 
-    regularized = toggles.control_representation.lower() == 'regularized'
     stochastic = toggles.problem_type.lower() == 'stochastic_gauss_zoh'
-    if not stochastic and regularized:
-        top = DeterministicTOPReg(problem_def)
-    elif not stochastic and not regularized:
-        top = DeterministicTOP(problem_def)
-    elif stochastic:
-        top = StochasticTOP(problem_def)
-    xStar = load_solution(os.path.join(case_dir, 'sol.h5'))
+    top = StochasticTOP(problem_def) if stochastic else DeterministicTOP(problem_def)
 
     print("Evaluating detailed deterministic trajectory...")
     data = generate_detailed_data(problem_def, top, xStar)
 
     if stochastic:
         det = data['Det']
-        t_node_bound = (xStar['t_node_bound'] if toggles.adaptive_mesh_type.lower() == 'adaptive_fixedtof'
-                        else problem_def.boundary_conditions.t_node_bound)
-        mc_sol_data = {'X_node_hst': det['X_node_hst'], 'U_arc_hst': det['U_arc_hst'],
-                       'K_arc_hst': det['K_arc_hst'], 't_node_bound': t_node_bound,
-                       'dV_mean': det['dV_mean']}
-        runner_cls = (EstimatedStateMCRunner if toggles.feedback_control_type.lower() == 'estimated_state'
+        runner_cls = (EstimatedStateMCRunner
+                      if toggles.feedback_control_type.lower() in ('estimated_state', 'estimated_state_sqrt')
                       else TrueStateMCRunner)
         print(f"Running Monte Carlo ({problem_def.dims.N_trials} trials)...")
-        runner = runner_cls(problem_def, top._propagator, top._error_propagator)
-        data['MC_Runs'] = runner.run(mc_sol_data, seed=seed)
+        runner = runner_cls(problem_def, top._propagator, top._error_propagator, top._control_repr)
+        data['MC_Runs'] = runner.run(det, seed=seed)
 
-    save_results(case_dir, data, problem_def)
+    save_results(case_dir, data, problem_def, solve_stats=solve_stats)
     print(f"Saved data.h5 + Sys.mat to {case_dir}")
     return data
 
@@ -79,16 +78,19 @@ if __name__ == "__main__":
     # Case selection (same style as plot_traj.py). The toggles used to rebuild
     # the problem come from the case's case.yaml; these just locate the dir.
     scenario = "L2_S-NRHO_to_L2_N-NRHO"
-    Problem_Type = "deterministic"          # deterministic | stochastic_gauss_zoh
-    Feedback_Control_Type = "true_state"           # true_state | true_state_sqrt | estimated_state
+    Problem_Type = "stochastic_gauss_zoh"          # deterministic | stochastic_gauss_zoh
+    Feedback_Control_Type = "true_state"           # true_state | true_state_sqrt | estimated_state | estimated_state_sqrt
     Measurements = ("range", "range-rate", "angles")
 
     case = Problem_Type
     if Problem_Type.lower() == 'stochastic_gauss_zoh':
         case += "_" + Feedback_Control_Type
-        if Feedback_Control_Type.lower() == 'estimated_state':
+        if Feedback_Control_Type.lower() in ('estimated_state', 'estimated_state_sqrt'):
             case += "_" + "_".join(Measurements)
     case_dir = f"Results/{scenario}/{case}/"
 
     print(f"Generating data for: {case_dir}")
-    generate_data(case_dir)
+    # The reading lives here, not in generate_data().
+    scenario_name, toggles = load_case_spec(case_dir)
+    xStar = load_solution(os.path.join(case_dir, 'sol.h5'))
+    generate_data(xStar, scenario_name, toggles, case_dir)
