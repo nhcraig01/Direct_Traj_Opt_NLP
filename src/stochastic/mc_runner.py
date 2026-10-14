@@ -128,10 +128,9 @@ class MonteCarloRunner:
         single_trial = self.build_single_trial(sol_data)
         batched = jax.jit(jax.vmap(single_trial), backend='cpu')
 
-        print(f"Running {N} MC Trials...")
         keys = jax.random.split(jax.random.PRNGKey(seed), N)
         chunks = [batched(keys[i:i + self._MC_N_LOOP])
-                  for i in tqdm(range(0, N, self._MC_N_LOOP))]
+                  for i in tqdm(range(0, N, self._MC_N_LOOP), desc=f"    Monte Carlo, {N} trials")]
         stacked = jax.tree_util.tree_map(lambda *xs: jnp.concatenate(xs, axis=0), *chunks)
 
         return self._postprocess(sol_data, stacked)

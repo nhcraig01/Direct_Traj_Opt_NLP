@@ -32,6 +32,7 @@ def write_case_yaml(case_dir: str, scenario: str, toggles: Toggles) -> str:
         'measurements': list(toggles.measurements),
         'gain_param_type': toggles.gain_param_type,
         'adaptive_mesh_type': toggles.adaptive_mesh_type,
+        'integrator': toggles.integrator,
         'alpha_rng': list(toggles.alpha_rng),
         'beta_rng': list(toggles.beta_rng),
     }
@@ -52,6 +53,7 @@ def load_case_spec(case_dir: str) -> tuple[str, Toggles]:
         measurements=tuple(spec['measurements']),
         gain_param_type=spec['gain_param_type'],
         adaptive_mesh_type=spec['adaptive_mesh_type'],
+        integrator=spec.get('integrator', 'diffrax'),
         alpha_rng=tuple(spec['alpha_rng']),
         beta_rng=tuple(spec['beta_rng']),
     )

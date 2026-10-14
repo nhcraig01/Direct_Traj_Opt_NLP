@@ -26,6 +26,7 @@ jax.config.update('jax_platform_name', 'cpu')
 
 from pyoptsparse.pySNOPT.pySNOPT import SNOPT
 
+from src.utils.console import banner, saved, snopt_summary, step
 from src.utils.io import yaml_load, save_solution, parse_snopt_stats, SOLVE_LOG_NAMES
 from src.problem.case_manifest import write_case_yaml
 from src.optimization.init_guess import hot_start_init_guess, random_init_guess
@@ -39,10 +40,10 @@ if __name__ == "__main__":
     # Scenarios (Scenarios/<scenario>.yaml):
     #   L2_S-NRHO_to_L2_N-NRHO / L1_N-HO_to_L2_N-HO / L1_Lyap_to_L2_Lyap
     #   L2_S-HO_to_L1_Lyap / L2_S-HO_to_L4_N-Axial / Sandbox 
-    scenario = "Sandbox"
+    scenario = "L2_S-NRHO_to_L2_N-NRHO"
 
     # Problem Types:  deterministic | stochastic_gauss_zoh
-    Problem_Type = "deterministic"
+    Problem_Type = "stochastic_gauss_zoh"
 
     # Control Representation :  cartesian | regularized
     Control_Representation = "cartesian"
@@ -50,8 +51,11 @@ if __name__ == "__main__":
     # Adaptive Mesh:  fixed | adaptive_fixedtof
     Adaptive_Mesh_Type = "fixed"
 
+    # Integrator:  diffrax | heyoka
+    Integrator = "heyoka"
+
     # Gain Parameterization (stochastic only):  arc_lqr | fulltraj_lqr
-    Gain_Parametrization_Type = "fulltraj_lqr"
+    Gain_Parametrization_Type = "arc_lqr"
 
     # Feedback Controller Types (stochastic only):
     #   true_state             - covariance propagation (TrueStateCovPropagator)
@@ -65,12 +69,12 @@ if __name__ == "__main__":
     Measurements = ("range","range-rate","angles",)
 
     # Departure/Arrival orbit phasing ranges
-    Alpha_Rng = (0.0, 0.0)
-    Beta_Rng = (0.0, 0.0)
+    Alpha_Rng = (0.0, 0.1)
+    Beta_Rng = (0.0, 0.1)
 
     # Hot Start: a CASE name to warm-start from (reads Results/<scenario>/<case>/
     # sol.h5), or None.
-    Hot_Start_Case = None
+    Hot_Start_Case = "deterministic"
 
     SEED = 1
 
@@ -118,9 +122,14 @@ if __name__ == "__main__":
         measurements=Measurements,
         gain_param_type=Gain_Parametrization_Type,
         adaptive_mesh_type=Adaptive_Mesh_Type,
+        integrator=Integrator,
         alpha_rng=Alpha_Rng,
         beta_rng=Beta_Rng,
     )
+    banner(scenario, toggles, [
+        ('start', f"hot start from {Hot_Start_Case}" if Hot_Start_Case else f"cold start, seed {SEED}"),
+        *([] if Run_Optimization else [('solve', 'skipped - generating data for the starting point')]),
+    ])
     problem_def = build_problem_def(config, toggles)
 
     # Control_Representation is dispatched inside the TOP (via its
@@ -132,14 +141,11 @@ if __name__ == "__main__":
     else:
         raise ValueError(f"Unknown Problem_Type: {Problem_Type!r}")
 
-    print("variables:", [v.name for v in top.variables()])
-    print("constraints:", [c.name for c in top.constraints()])
-
     # Initial guess (+ optional hot start) --------------------------------------
-    print("Setting Up Initial Guess")
-    init_guess = random_init_guess(top.variables(), jax.random.PRNGKey(SEED))
-    if hot_start_file is not None:
-        init_guess = {**init_guess, **hot_start_init_guess(hot_start_file, top.variables())}
+    with step("initial guess"):
+        init_guess = random_init_guess(top.variables(), jax.random.PRNGKey(SEED))
+        if hot_start_file is not None:
+            init_guess = {**init_guess, **hot_start_init_guess(hot_start_file, top.variables())}
 
     os.makedirs(case_dir, exist_ok=True)
 
@@ -149,49 +155,46 @@ if __name__ == "__main__":
         # reshaped to each variable's declared size - guess_fn hands back a bare
         # scalar for alpha/beta, which would otherwise land in sol.h5 as a
         # scalar dataset load_solution() can't read.
-        if hot_start_file is None:
-            print("WARNING: Run_Optimization is False with no hot start - "
-                  "generating data for a random initial guess.")
-        print(f"Skipping optimization, using {hot_start_file or 'the random initial guess'}")
         xStar = {v.name: jax.numpy.reshape(init_guess.get(v.name, v.value), (v.size,))
                  for v in top.variables()}
     else:
         # Build the pyoptsparse problem (addVarGroup/addConGroup + sparsity) -----
-        print("Processing SNOPT Gradient Sparsity")
-        optprob, sens = top.to_pyoptsparse(init_guess)
+        with step("building SNOPT problem", timed=True):
+            optprob, sens = top.to_pyoptsparse(init_guess)
 
         # Solve -----------------------------------------------------------------
         # SNOPT's print/summary files stay at their default location (repo root).
         # The pyoptsparse history file does go in the case dir - it's what carries
         # the per-major-iteration series (feasibility/optimality/merit) into
         # data.h5's solve_stats group, so it needs to travel with the solution.
-        print("SNOPT Starting")
-        sol = SNOPT(options=optOptions)(
-            optprob, sens=sens, timeLimit=None,
-            storeHistory=os.path.join(case_dir, SOLVE_LOG_NAMES['history']),
-        )
-        print("SNOPT Finished: %s" % (sol.optInform['text']))
+        # The progress table starts here, not earlier: building the problem
+        # above already evaluates once, for the sparsity pattern.
+        top.progress.start()
+        try:
+            sol = SNOPT(options=optOptions)(
+                optprob, sens=sens, timeLimit=None,
+                storeHistory=os.path.join(case_dir, SOLVE_LOG_NAMES['history']),
+                storeSens=False,
+            )
+        finally:
+            top.progress.finish()
         xStar = sol.xStar
-
-        snopt_stats = parse_snopt_stats()
-        print("\nSolve Time: %.3f s" % snopt_stats['solve_time_s'])
-        print("Major Iterations: %d" % snopt_stats['major_iterations'])
-        print("Minor Iterations: %d" % snopt_stats['minor_iterations'])
-        print("User Function Calls: %d" % snopt_stats['user_func_calls'])
-        print("Constraint Function Time: %.3f s" % snopt_stats['constraint_func_time_s'])
-        print("Objective Function Time: %.3f s" % snopt_stats['objective_func_time_s'])
-        print("Avg Time per Function Call: %.4f s" %
-              (snopt_stats['constraint_func_time_s'] / snopt_stats['user_func_calls']))
+        snopt_summary(parse_snopt_stats(SOLVE_LOG_NAMES['summary']), SOLVE_LOG_NAMES['summary'])
 
     # Save the solution + its case manifest -------------------------------------
     # Only a real solve writes these; a bypass leaves whatever solution is
     # already in case_dir untouched.
+    written = []
     if Run_Optimization:
         save_solution(os.path.join(case_dir, "sol.h5"), xStar)
         write_case_yaml(case_dir, scenario, toggles)
-        print(f"\nSaved solution + case.yaml to {case_dir}")
+        written += ['sol.h5', 'case.yaml']
 
     if Generate_Data:
         from generate_data import generate_data
         # solve_stats only describes a solve that actually happened here.
         generate_data(xStar, scenario, toggles, case_dir, solve_stats=Run_Optimization)
+        written += ['data.h5', 'Sys.mat']
+
+    if written:
+        saved(case_dir, written)

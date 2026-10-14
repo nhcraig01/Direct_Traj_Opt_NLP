@@ -37,6 +37,7 @@ jax.config.update('jax_platform_name', 'cpu')
 
 from src.problem.case_manifest import load_case_spec
 from src.postprocess.detailed_trajectory import generate_detailed_data
+from src.utils.console import banner, saved, step
 from src.utils.io import yaml_load, load_solution, save_results
 from src.stochastic.mc_runner import EstimatedStateMCRunner, TrueStateMCRunner
 from src.problem.problem_definition import build_problem_def
@@ -56,20 +57,20 @@ def generate_data(xStar, scenario, toggles, case_dir, seed=0, solve_stats=True):
     stochastic = toggles.problem_type.lower() == 'stochastic_gauss_zoh'
     top = StochasticTOP(problem_def) if stochastic else DeterministicTOP(problem_def)
 
-    print("Evaluating detailed deterministic trajectory...")
-    data = generate_detailed_data(problem_def, top, xStar)
+    print("\n  generating data")
+    with step("detailed trajectory", indent=4):
+        data = generate_detailed_data(problem_def, top, xStar)
 
     if stochastic:
         det = data['Det']
         runner_cls = (EstimatedStateMCRunner
                       if toggles.feedback_control_type.lower() in ('estimated_state', 'estimated_state_sqrt')
                       else TrueStateMCRunner)
-        print(f"Running Monte Carlo ({problem_def.dims.N_trials} trials)...")
         runner = runner_cls(problem_def, top._propagator, top._error_propagator, top._control_repr)
-        data['MC_Runs'] = runner.run(det, seed=seed)
+        data['MC_Runs'] = runner.run(det, seed=seed)  # prints its own progress bar
 
+    # data.h5 + Sys.mat; the caller reports what was saved.
     save_results(case_dir, data, problem_def, solve_stats=solve_stats)
-    print(f"Saved data.h5 + Sys.mat to {case_dir}")
     return data
 
 
@@ -89,8 +90,9 @@ if __name__ == "__main__":
             case += "_" + "_".join(Measurements)
     case_dir = f"Results/{scenario}/{case}/"
 
-    print(f"Generating data for: {case_dir}")
     # The reading lives here, not in generate_data().
     scenario_name, toggles = load_case_spec(case_dir)
     xStar = load_solution(os.path.join(case_dir, 'sol.h5'))
+    banner(scenario_name, toggles, [('data', "regenerating from the case's sol.h5")])
     generate_data(xStar, scenario_name, toggles, case_dir)
+    saved(case_dir, ['data.h5', 'Sys.mat'])

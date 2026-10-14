@@ -71,6 +71,20 @@ This is written for WSL2/Ubuntu (apt); the same steps apply directly on native L
    Re-`source .venv/bin/activate` (or open a new terminal) afterward.
 4. **Verify:** `python -c "from pyoptsparse.pySNOPT.pySNOPT import SNOPT; print('OK')"` should import cleanly with no missing-library errors, in the same `.venv` used for everything else.
 
+### heyoka integrator (optional)
+
+`dir_traj_opt.py`'s `Integrator` toggle selects `diffrax` (the default, installed above) or
+[heyoka](https://bluescarni.github.io/heyoka.py/), a Taylor-method integrator that gets the
+trajectory sensitivities from variational equations — much faster per SNOPT iteration, and more
+accurate in the derivatives. heyoka is only imported when it's selected, so it isn't needed otherwise.
+
+- **Linux:** `pip install heyoka` into the `.venv` (prebuilt wheels on PyPI).
+- **macOS:** there's no prebuilt wheel on PyPI. It's prebuilt on conda-forge, or can be built from
+  source into the `.venv` (on current Apple toolchains this needs a couple of small fixes). Install
+  notes to follow.
+
+Check with `python -c "import heyoka"`.
+
 ## Repo layout
 
 ```
