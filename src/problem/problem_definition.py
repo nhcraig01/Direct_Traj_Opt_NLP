@@ -125,6 +125,7 @@ class Toggles:
     measurements: tuple = ()                   # e.g. ("range", "range-rate", "angles")
     gain_param_type: str = "fulltraj_lqr"      # "arc_lqr" | "fulltraj_lqr"
     adaptive_mesh_type: str = "fixed"          # "fixed" | "adaptive_fixedtof"
+    integrator: str = "diffrax"                # "diffrax" | "heyoka" (src/dynamics/heyoka_propagator.py)
     alpha_rng: tuple = (0.0, 1.0)              # (min, max) bounds on the alpha phasing variable; (a, a) pins it
     beta_rng: tuple = (0.0, 1.0)               # (min, max) bounds on the beta phasing variable; (b, b) pins it
     det_col_avoid: bool = False

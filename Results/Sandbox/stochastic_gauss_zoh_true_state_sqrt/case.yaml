@@ -6,11 +6,12 @@ measurements:
 - range
 - range-rate
 - angles
-gain_param_type: fulltraj_lqr
+gain_param_type: arc_lqr
 adaptive_mesh_type: fixed
+integrator: heyoka
 alpha_rng:
 - 0.0
-- 0.0
+- 1.0
 beta_rng:
 - 0.0
-- 0.0
+- 1.0

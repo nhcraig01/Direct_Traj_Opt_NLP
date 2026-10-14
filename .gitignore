@@ -34,3 +34,6 @@ desktop.ini
 # Claude Code - personal/local, not meant to be shared
 .claude/settings.local.json
 .claude/worktrees/
+
+# heyoka_benchmark/ run outputs - regenerable by rerunning the scripts
+heyoka_benchmark/_out/

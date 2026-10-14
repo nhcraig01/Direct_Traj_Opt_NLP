@@ -6,11 +6,11 @@ measurements:
 - range
 - range-rate
 - angles
-gain_param_type: arc_lqr
+gain_param_type: fulltraj_lqr
 adaptive_mesh_type: fixed
 alpha_rng:
 - 0.0
-- 0.5
+- 0.0
 beta_rng:
 - 0.0
 - 0.0

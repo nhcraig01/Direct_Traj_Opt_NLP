@@ -9,8 +9,25 @@ from src.problem.problem_definition import ProblemDefinition
 _MOON_RADIUS_KM = 1737.5
 
 
-def _cr3bp_eom_lambdify(U_Acc_min_nd: float, ve: float, mu: float, safe_d: float):
-    """Build the jax-lambdified CR3BP equations of motion.
+def cr3bp_eom_constants(problem_def: ProblemDefinition) -> tuple[float, float, float, float]:
+    """(U_Acc_min_nd, ve, mu, safe_d) - the numbers the CR3BP EOM is built from."""
+    return (
+        problem_def.spacecraft.U_Acc_min_nd,
+        problem_def.spacecraft.ve,
+        problem_def.Sys['mu'],
+        _MOON_RADIUS_KM / problem_def.Sys['Ls'],
+    )
+
+
+def cr3bp_eom_sympy(U_Acc_min_nd: float, ve: float, mu: float, safe_d: float):
+    """Symbolic CR3BP equations of motion - the single definition shared by the
+    jax build below and the heyoka build (src/dynamics/heyoka_propagator.py).
+
+    Returns (t, states, controls, eoms, softening). eoms still carries the
+    gravity-softening factors as the placeholder symbols dtmp/rtmp; softening
+    maps each placeholder to its Piecewise. The jax build substitutes the
+    Piecewise directly; heyoka can't convert Piecewise, so it switches
+    branches with events instead.
 
     Ported from Lib.dynamics.CR3BPDynamics(), dropping the Aprop_eval/
     Bprop_eval/U_st_eval/JC_eval outputs - confirmed unused by the
@@ -45,7 +62,7 @@ def _cr3bp_eom_lambdify(U_Acc_min_nd: float, ve: float, mu: float, safe_d: float
 
     dmod = sp.Piecewise((dmod_term, dval <= eta * safe_d), (1 / dval ** 3, dval > eta * safe_d))
     rmod = sp.Piecewise((rmod_term, rval <= eta * safe_d), (1 / rval ** 3, rval > eta * safe_d))
-    subs_dict = {rtmp: rmod, dtmp: dmod}
+    softening = {rtmp: rmod, dtmp: dmod}
 
     eoms = sp.Matrix([[v_x],
                       [v_y],
@@ -53,9 +70,15 @@ def _cr3bp_eom_lambdify(U_Acc_min_nd: float, ve: float, mu: float, safe_d: float
                       [term1 + 2 * v_y + u1 * U_Acc_min_nd / m],
                       [term2 - 2 * v_x + u2 * U_Acc_min_nd / m],
                       [term3 + u3 * U_Acc_min_nd / m],
-                      [-u_norm * U_Acc_min_nd / ve]]).subs(subs_dict)
+                      [-u_norm * U_Acc_min_nd / ve]])
 
-    return sp.lambdify((t, states, controls), eoms, 'jax')
+    return t, states, controls, eoms, softening
+
+
+def _cr3bp_eom_lambdify(U_Acc_min_nd: float, ve: float, mu: float, safe_d: float):
+    """Build the jax-lambdified CR3BP equations of motion."""
+    t, states, controls, eoms, softening = cr3bp_eom_sympy(U_Acc_min_nd, ve, mu, safe_d)
+    return sp.lambdify((t, states, controls), eoms.subs(softening), 'jax')
 
 
 class EquationsOfMotion:
@@ -69,13 +92,7 @@ class CR3BPDynamics(EquationsOfMotion):
     """Today's (and currently only) dynamical model."""
 
     def __init__(self, problem_def: ProblemDefinition):
-        moon_radius_nd = _MOON_RADIUS_KM / problem_def.Sys['Ls']
-        self._eom_eval = _cr3bp_eom_lambdify(
-            problem_def.spacecraft.U_Acc_min_nd,
-            problem_def.spacecraft.ve,
-            problem_def.Sys['mu'],
-            moon_radius_nd,
-        )
+        self._eom_eval = _cr3bp_eom_lambdify(*cr3bp_eom_constants(problem_def))
 
     def eom(self, t: float, state: Array, args: Array) -> Array:
         return self._eom_eval(t, state, args).reshape(-1)

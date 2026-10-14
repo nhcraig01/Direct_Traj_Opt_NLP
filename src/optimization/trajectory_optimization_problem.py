@@ -26,6 +26,7 @@ from src.stochastic.error_propagator import (
     TrueStateCovPropagator, TrueStateSqrtCovPropagator,
 )
 from src.stochastic.gain_parameterization import LQRArcGains, LQRFullTrajGains
+from src.utils.console import EvalTable
 from src.utils.io import process_sparsity
 
 _CONTROL_REPR_CLS = {'cartesian': CartesianControl, 'regularized': RegularizedControl}
@@ -39,11 +40,46 @@ def _build_control_repr(problem_def: ProblemDefinition) -> ControlRepresentation
     return cls()
 
 
+def _build_propagator(problem_def: ProblemDefinition, sensitivities: bool) -> Propagator:
+    """State-only (DeterministicTOP) or state + sensitivity (StochasticTOP)
+    propagator for toggles.integrator."""
+    integrator = problem_def.toggles.integrator.lower()
+    if integrator == 'diffrax':
+        cls = StateSensitivityPropagator if sensitivities else StatePropagator
+    elif integrator == 'heyoka':
+        # Imported here so heyoka is only needed when it's selected.
+        from src.dynamics.heyoka_propagator import HeyokaStatePropagator, HeyokaStateSensitivityPropagator
+        cls = HeyokaStateSensitivityPropagator if sensitivities else HeyokaStatePropagator
+    else:
+        raise ValueError(f"Unknown integrator: {integrator!r}")
+    return cls(problem_def, CR3BPDynamics(problem_def))
+
+
 class TrajectoryOptimizationProblem:
+    # Progress table columns (console.EvalTable, fed from evaluate()): the
+    # objective terms, then each constraint in _PRINT_CONSTRAINTS that this
+    # problem has, then any subclass variable columns.
+    _OBJECTIVE_COLUMNS = ('J',)
+    _VARIABLE_COLUMNS = ()
+    _PRINT_CONSTRAINTS = (
+        ('c_X0', 'X0'), ('c_Xf', 'Xf'), ('c_X_mp', 'X_mp'),
+        ('c_P_Xf', 'P_Xf'), ('c_Us', 'Us'), ('c_det_col_avoid', 'Col'),
+    )
+
     def __init__(self, problem_def: ProblemDefinition, propagator: Propagator, constraints_list: list[Constraint]):
         self._problem_def = problem_def
         self._propagator = propagator
         self._constraints_list = constraints_list
+
+        # Equality constraints print as max|c|, inequality ones as max(c - upper)
+        # so every inequality column reads "<= 0 is satisfied" whatever its
+        # bound. Linear constraints aren't in evaluate()'s output, so they're out.
+        printed = {c.name: c for c in constraints_list if not c.linearities}
+        present = [(printed[n], label) for n, label in self._PRINT_CONSTRAINTS if n in printed]
+        self._print_eq = [(c, l) for c, l in present if bool(jnp.all(c.lower == c.upper))]
+        self._print_ineq = [(c, l) for c, l in present if not bool(jnp.all(c.lower == c.upper))]
+        self.progress = EvalTable(list(self._OBJECTIVE_COLUMNS), [l for _, l in self._print_eq],
+                                  [l for _, l in self._print_ineq], list(self._VARIABLE_COLUMNS))
 
     def variables(self) -> list[OptimizationVariable]:
         raise NotImplementedError
@@ -60,26 +96,10 @@ class TrajectoryOptimizationProblem:
     def evaluate(self, inputs: dict) -> dict:
         raise NotImplementedError
 
-    # Per-iteration progress print (fires on every function evaluation, same
-    # as legacy objective_and_constraints). Built dynamically so it only
-    # reports the constraints actually present in `output` - linear ones
-    # (skipped in evaluate) and inactive ones (e.g. collision avoidance when
-    # off) are simply omitted rather than KeyError'd.
-    _PRINT_CONSTRAINTS = (
-        ('c_X0', 'X0', True), ('c_Xf', 'Xf', True), ('c_X_mp', 'X_mp', True),
-        ('c_P_Xf', 'P_Xf', False), ('c_det_col_avoid', 'Col', False),
-    )
-
-    def _constraint_print_terms(self, output: dict) -> tuple[str, list]:
-        """(format-suffix, args) for whichever standard nonlinear constraints
-        exist in `output`. Equality constraints report max|value|, inequality
-        constraints report max(value)."""
-        fmt, args = "", []
-        for name, label, signed in self._PRINT_CONSTRAINTS:
-            if name in output:
-                fmt += f", {label}: {{:.0e}}"
-                args.append(jnp.max(jnp.abs(output[name])) if signed else jnp.max(output[name]))
-        return fmt, args
+    def _constraint_progress(self, output: dict) -> list:
+        """The constraint columns of the progress table, in table order."""
+        return ([jnp.max(jnp.abs(output[c.name] - c.lower)) for c, _ in self._print_eq]
+                + [jnp.max(output[c.name] - c.upper) for c, _ in self._print_ineq])
 
     def to_pyoptsparse(self, init_guess: dict) -> tuple[Optimization, callable]:
         vals = jax.jit(self.evaluate, backend='cpu')
@@ -125,7 +145,7 @@ class DeterministicTOP(TrajectoryOptimizationProblem):
     downstream consumes."""
 
     def __init__(self, problem_def: ProblemDefinition):
-        propagator = StatePropagator(problem_def, CR3BPDynamics(problem_def))
+        propagator = _build_propagator(problem_def, sensitivities=False)
         self._control_repr = _build_control_repr(problem_def)
         constraints_list = [
             BoundaryConstraint(problem_def, "initial"),
@@ -217,8 +237,7 @@ class DeterministicTOP(TrajectoryOptimizationProblem):
                 continue  # linear constraints evaluated by pyoptsparse via their jac, not vals()
             output[c.name] = c.evaluate(self._problem_def, sol_data)
 
-        fmt, args = self._constraint_print_terms(output)
-        jax.debug.print("J: {:.3e}" + fmt, output['o'], *args)
+        jax.debug.callback(self.progress, output['o'], *self._constraint_progress(output))
 
         return output
 
@@ -239,8 +258,11 @@ class StochasticTOP(TrajectoryOptimizationProblem):
     already consume B.
     """
 
+    _OBJECTIVE_COLUMNS = ('J', 'J_det', 'J_stat')
+    _VARIABLE_COLUMNS = ('xi_max',)
+
     def __init__(self, problem_def: ProblemDefinition):
-        propagator = StateSensitivityPropagator(problem_def, CR3BPDynamics(problem_def))
+        propagator = _build_propagator(problem_def, sensitivities=True)
         self._control_repr = _build_control_repr(problem_def)
 
         gain_param_type = problem_def.toggles.gain_param_type.lower()
@@ -383,10 +405,7 @@ class StochasticTOP(TrajectoryOptimizationProblem):
                 continue  # linear constraints evaluated by pyoptsparse via their jac, not vals()
             output[c.name] = c.evaluate(self._problem_def, sol_data)
 
-        fmt, args = self._constraint_print_terms(output)
-        jax.debug.print(
-            "J_d: {:.3e}, J_s: {:.3e}" + fmt + ", max_xi: {:.1e}",
-            sol_data['J_det'], sol_data['J_stat'], *args, jnp.max(sol_data['gain_weights']),
-        )
+        jax.debug.callback(self.progress, output['o'], sol_data['J_det'], sol_data['J_stat'],
+                           *self._constraint_progress(output), jnp.max(sol_data['gain_weights']))
 
         return output

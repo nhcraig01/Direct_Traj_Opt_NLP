@@ -1,13 +1,15 @@
 scenario: L2_S-NRHO_to_L2_N-NRHO
 problem_type: deterministic
 control_representation: cartesian
-feedback_control_type: true_state
+feedback_control_type: true_state_sqrt
 measurements:
 - range
 - range-rate
 - angles
-gain_param_type: fulltraj_lqr
+gain_param_type: arc_lqr
 adaptive_mesh_type: fixed
+integrator: heyoka
+gravity_limiting: true
 alpha_rng:
 - 0.0
 - 0.1
